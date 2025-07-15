@@ -1,0 +1,1007 @@
+/*
+ * Firmware for the discovery-drive satellite dish rotator.
+ * Motor Controller - Manage the movement and safety of the motors.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+#include "motor_controller.h"
+
+// =============================================================================
+// CONSTRUCTOR AND INITIALIZATION
+// =============================================================================
+
+MotorSensorController::MotorSensorController(Preferences& prefs, INA219Manager& ina219Manager, Logger& logger) 
+    : _preferences(prefs), ina219Manager(ina219Manager), _logger(logger) {
+    
+    // Create mutexes for thread-safe access
+    _setPointMutex = xSemaphoreCreateMutex();
+    _getAngleMutex = xSemaphoreCreateMutex();
+    _correctedAngleMutex = xSemaphoreCreateMutex();
+    _errorMutex = xSemaphoreCreateMutex();
+    _el_startAngleMutex = xSemaphoreCreateMutex();
+}
+
+void MotorSensorController::begin() {
+    // Load configuration parameters from preferences
+    P_el = _preferences.getInt("P_el", 100);
+    P_az = _preferences.getInt("P_az", 5);
+    MIN_EL_SPEED = _preferences.getInt("MIN_EL_SPEED", 50);
+    MIN_AZ_SPEED = _preferences.getInt("MIN_AZ_SPEED", 150);
+    _MIN_AZ_TOLERANCE = _preferences.getFloat("MIN_AZ_TOL", 0.5);
+    _MIN_EL_TOLERANCE = _preferences.getFloat("MIN_EL_TOL", 0.1);
+    _maxPowerBeforeFault = _preferences.getInt("MAX_POWER", 10);
+
+    // Configure motor control pins
+    pinMode(_pwm_pin_az, OUTPUT);
+    digitalWrite(_pwm_pin_az, 1);
+    pinMode(_pwm_pin_el, OUTPUT);
+    digitalWrite(_pwm_pin_el, 1);
+    pinMode(_ccw_pin_az, OUTPUT);
+    digitalWrite(_ccw_pin_az, 0);
+    pinMode(_ccw_pin_el, OUTPUT);
+    digitalWrite(_ccw_pin_el, 0);
+
+    // Load motor speed settings
+    max_dual_motor_az_speed = _preferences.getInt("maxDMAzSpeed", MAX_AZ_SPEED);
+    max_dual_motor_el_speed = _preferences.getInt("maxDMElSpeed", MAX_EL_SPEED);
+    max_single_motor_az_speed = _preferences.getInt("maxSMAzSpeed", 0);
+    max_single_motor_el_speed = _preferences.getInt("maxSMElSpeed", 0);
+    singleMotorMode = _preferences.getBool("singleMotorMode", false);
+
+    // Check magnet presence for both sensors
+    int az_magnetStatus = checkMagnetPresence(_az_hall_i2c_addr);
+    delay(500);
+    int el_magnetStatus = checkMagnetPresence(_el_hall_i2c_addr);
+
+    // Log magnet status
+    _logger.info("AZ Magnet Detected (MD): " + String((az_magnetStatus & 32) > 0));
+    _logger.info("AZ Magnet Too Weak (ML): " + String((az_magnetStatus & 16) > 0));
+    _logger.info("AZ Magnet Too Strong (MH): " + String((az_magnetStatus & 8) > 0));
+    _logger.info("EL Magnet Detected (MD): " + String((el_magnetStatus & 32) > 0));
+    _logger.info("EL Magnet Too Weak (ML): " + String((el_magnetStatus & 16) > 0));
+    _logger.info("EL Magnet Too Strong (MH): " + String((el_magnetStatus & 8) > 0));
+
+    // Set magnet fault flags
+    if ((az_magnetStatus & 32) == 0) {
+        _logger.error("NO AZ MAGNET DETECTED!");
+        magnetFault = true;
+    }
+    
+    if ((el_magnetStatus & 32) == 0) {
+        _logger.error("NO EL MAGNET DETECTED!");
+        magnetFault = true;
+    }
+
+    // Initialize azimuth positioning
+    float degAngleAz = getAvgAngle(_az_hall_i2c_addr);
+    _az_startAngle = 10; // Avoid 0 to prevent backlash switching between 0 and 359
+    setCorrectedAngleAz(correctAngle(_az_startAngle, degAngleAz));
+    needs_unwind = _preferences.getInt("needs_unwind", 0);
+
+    // Initialize elevation positioning
+    float degAngleEl = getAvgAngle(_el_hall_i2c_addr);
+    setElStartAngle(_preferences.getFloat("el_cal", degAngleEl));
+    _logger.info("EL START ANGLE: " + String(getElStartAngle()));
+    setCorrectedAngleEl(correctAngle(getElStartAngle(), degAngleEl));
+
+    // Set home position
+    setSetPointAz(0);
+    setSetPointEl(0);
+}
+
+// =============================================================================
+// MAIN CONTROL LOOPS
+// =============================================================================
+
+void MotorSensorController::runControlLoop() {
+    // Get current setpoints and update flags
+    float current_setpoint_az = getSetPointAz();
+    float current_setpoint_el = getSetPointEl();    
+    bool setPointAzUpdated = _setPointAzUpdated;
+    bool setPointElUpdated = _setPointElUpdated;
+
+    // Reset update flags
+    if (_setPointAzUpdated) _setPointAzUpdated = false;
+    if (_setPointElUpdated) _setPointElUpdated = false;
+
+    // Read and process azimuth angle
+    float degAngleAz = getAvgAngle(_az_hall_i2c_addr);
+    setCorrectedAngleAz(correctAngle(_az_startAngle, degAngleAz));
+    
+    if (!calMode) {
+        calcIfNeedsUnwind(getCorrectedAngleAz());
+    }
+
+    // Read and process elevation angle
+    float degAngleEl = getAvgAngle(_el_hall_i2c_addr);
+    setCorrectedAngleEl(correctAngle(getElStartAngle(), degAngleEl));
+
+    // Calculate control errors
+    angle_shortest_error_az(current_setpoint_az, getCorrectedAngleAz());
+    angle_error_el(current_setpoint_el, getCorrectedAngleEl());
+
+    // Execute control logic
+    if (!calMode) {
+        updateMotorControl(current_setpoint_az, current_setpoint_el, setPointAzUpdated, setPointElUpdated);
+        updateMotorPriority(setPointAzUpdated, setPointElUpdated);
+        actuate_motor_az(MIN_AZ_SPEED);
+        actuate_motor_el(MIN_EL_SPEED);
+    } else {
+        handleCalibrationMode();
+    }
+
+    handleOscillationDetection();
+}
+
+void MotorSensorController::runSafetyLoop() {
+    String errorText = "";
+    bool hasNewErrors = false;
+
+    // Check fault conditions
+    if (badAngleFlag) {
+        global_fault = true;
+        errorText += "Bad angle.\n";
+        hasNewErrors = true;
+    }
+
+    if (magnetFault) {
+        global_fault = true;
+        errorText += "MAGNET NOT DETECTED.\n";
+        hasNewErrors = true;
+    }
+
+    if (i2cErrorFlag_az) {
+        global_fault = true;
+        errorText += "Communications error in AZ i2c communications.\n";
+        hasNewErrors = true;
+    }
+
+    if (i2cErrorFlag_el) {
+        global_fault = true;
+        errorText += "Communications error in EL i2c communications.\n";
+        hasNewErrors = true;
+    }
+
+    // Check elevation bounds (if not in calibration mode)
+    if (!calMode) {
+        if ((getCorrectedAngleEl() > 95 && getCorrectedAngleEl() < 355) || isnan(getCorrectedAngleEl())) {
+            outOfBoundsFault = true;
+        }
+
+        if (outOfBoundsFault) {
+            global_fault = true;
+            errorText += "EL went out of bounds. Value: " + String(getCorrectedAngleEl()) + "\n";
+            hasNewErrors = true;
+        }
+    }
+
+    // Check azimuth over-spin
+    if (!calMode) {
+        if (abs(needs_unwind) > 1) overSpinFault = true;
+
+        if (overSpinFault) {
+            global_fault = true;
+            errorText += "Needs_unwind went beyond 1, AZ has over spun. Needs_unwind value: " + String(needs_unwind) + "\n";
+            hasNewErrors = true;
+        }
+    }
+
+    // Check power consumption
+    float powerValue = ina219Manager.getPower();
+    if (powerValue > getMaxPowerBeforeFault()) overPowerFault = true;
+
+    if (overPowerFault) {
+        global_fault = true;
+        errorText += "Power exceeded " + String(getMaxPowerBeforeFault()) + "W. Rotator may be stuck or jammed. Power: " + String(powerValue) + "W\n";
+        hasNewErrors = true;
+    }
+
+    // Check voltage level
+    float loadVoltageValue = ina219Manager.getLoadVoltage();
+    if (loadVoltageValue < 9) lowVoltageFault = true;
+
+    if (lowVoltageFault) {
+        global_fault = true;
+        errorText += "Voltage too low. Voltage: " + String(loadVoltageValue) + "V\n";
+        hasNewErrors = true;
+    }
+
+    // Emergency stop on fault (except in calibration mode)
+    if (global_fault && !calMode) {
+        setPWM(_pwm_pin_el, 255);
+        setPWM(_pwm_pin_az, 255);
+        errorText += "EMERGENCY ALL STOP. RESTART ESP32 TO CLEAR FAULTS.\n";
+        hasNewErrors = true;
+        slowPrint(errorText, 0);
+    }
+}
+
+// =============================================================================
+// MOTOR CONTROL
+// =============================================================================
+
+void MotorSensorController::actuate_motor_az(int MIN_SPEED) {
+    double error = getErrorAz() * P_az;
+
+    // Set direction based on error sign
+    digitalWrite(_ccw_pin_az, (error >= 0) ? LOW : HIGH);
+
+    // Calculate target speed with constraints
+    int targetSpeed = MIN_SPEED - constrain(abs(error), _maxAdjustedSpeed_az, MIN_SPEED);
+    targetSpeed = max(targetSpeed, _maxAdjustedSpeed_az);
+
+    // Reset speed on direction change
+    if ((error < 0) != (_last_error_az < 0)) {
+        _current_speed_az = MIN_SPEED;
+    }
+    _last_error_az = error;
+
+    // Control motor speed
+    if (setPointState_az && !global_fault && !_isAzMotorLatched) {
+        // Gradual speed adjustment
+        const int speedDecrement = 10;
+        if (_current_speed_az > targetSpeed) {
+            _current_speed_az = max(_current_speed_az - speedDecrement, targetSpeed);
+        } else if (_current_speed_az < targetSpeed) {
+            _current_speed_az = min(_current_speed_az + speedDecrement, targetSpeed);
+        }
+        setPWM(_pwm_pin_az, _current_speed_az);
+    } else {
+        // Stop motor
+        setPWM(_pwm_pin_az, 255);
+        _current_speed_az = MIN_SPEED;
+    }
+}
+
+void MotorSensorController::actuate_motor_el(int MIN_SPEED) {
+    double error = getErrorEl() * P_el;
+
+    // Set direction based on error sign
+    digitalWrite(_ccw_pin_el, (error >= 0) ? LOW : HIGH);
+
+    // Calculate target speed with constraints
+    int targetSpeed = MIN_SPEED - constrain(abs(error), _maxAdjustedSpeed_el, MIN_SPEED);
+    targetSpeed = max(targetSpeed, _maxAdjustedSpeed_el);
+
+    // Reset speed on direction change
+    if ((error < 0) != (_last_error_el < 0)) {
+        _current_speed_el = MIN_SPEED;
+    }
+    _last_error_el = error;
+
+    // Control motor speed
+    if (setPointState_el && !global_fault && !_isElMotorLatched) {
+        // Gradual speed adjustment
+        const int speedDecrement = 10;
+        if (_current_speed_el > targetSpeed) {
+            _current_speed_el = max(_current_speed_el - speedDecrement, targetSpeed);
+        } else if (_current_speed_el < targetSpeed) {
+            _current_speed_el = min(_current_speed_el + speedDecrement, targetSpeed);
+        }
+        setPWM(_pwm_pin_el, _current_speed_el);
+    } else {
+        // Stop motor
+        setPWM(_pwm_pin_el, 255);
+        _current_speed_el = MIN_SPEED;
+    }
+}
+
+void MotorSensorController::updateMotorControl(float currentSetPointAz, float currentSetPointEl, bool setPointAzUpdated, bool setPointElUpdated) {
+    // Determine if motors should be active based on error tolerance
+    setPointState_az = (fabs(getErrorAz()) > _MIN_AZ_TOLERANCE);
+    setPointState_el = (fabs(getErrorEl()) > _MIN_EL_TOLERANCE);
+
+    // Reset latch parameters on setpoint changes
+    if (setPointAzUpdated) {
+        _isAzMotorLatched = false;
+        _prev_error_az = 0;
+    }
+
+    if (setPointElUpdated) {
+        _isElMotorLatched = false;
+        _prev_error_el = 0;
+    }
+
+    // Detect overshoot (error sign flip)
+    bool az_sign_flipped = (_prev_error_az * getErrorAz() < 0) && 
+                          (fabs(_prev_error_az) > 0.0001) && 
+                          (fabs(getErrorAz()) > 0.0001);
+    bool el_sign_flipped = (_prev_error_el * getErrorEl() < 0) && 
+                          (fabs(_prev_error_el) > 0.0001) && 
+                          (fabs(getErrorEl()) > 0.0001);
+
+    // Latch motors on target reached or overshoot
+    if (!setPointState_az || az_sign_flipped) {
+        _isAzMotorLatched = true;
+    }
+
+    if (!setPointState_el || el_sign_flipped) {
+        _isElMotorLatched = true;
+    }
+
+    _prev_error_az = getErrorAz();
+    _prev_error_el = getErrorEl();
+}
+
+void MotorSensorController::updateMotorPriority(bool setPointAzUpdated, bool setPointElUpdated) {
+    // Handle single motor mode priority
+    if (singleMotorMode) {
+        // Determine priority based on normalized error when setpoint changes
+        if (setPointAzUpdated || setPointElUpdated) {
+            // Normalize by motor speeds (1.5RPM for az, 0.25RPM for el)
+            _az_priority = (fabs(getErrorAz()) / 1.5 > fabs(getErrorEl()) / 0.25);
+        }
+        
+        // Execute priority control
+        if (_az_priority) {
+            if (setPointState_az) {
+                setPointState_el = false;
+            } else {
+                _az_priority = false;
+            }
+        } else {
+            if (setPointState_el) {
+                setPointState_az = false;
+            } else {
+                _az_priority = true;
+            }
+        }
+    }
+
+    // Adjust maximum speeds based on motor activity
+    _maxAdjustedSpeed_az = setPointState_el ? max_dual_motor_az_speed : max_single_motor_az_speed;
+    _maxAdjustedSpeed_el = setPointState_az ? max_dual_motor_el_speed : max_single_motor_el_speed;
+}
+
+void MotorSensorController::setPWM(int pin, int PWM) {
+    analogWrite(pin, PWM);
+}
+
+// =============================================================================
+// ANGLE CALCULATION AND ERROR HANDLING
+// =============================================================================
+
+void MotorSensorController::angle_shortest_error_az(float target_angle, float current_angle) {
+    // Normalize angles to 0-360 range
+    target_angle = fmod(target_angle, 360);
+    if (target_angle < 0) target_angle += 360;
+
+    current_angle = fmod(current_angle, 360);
+    if (current_angle < 0) current_angle += 360;
+
+    // Handle edge cases at 0/360 boundary based on unwinding state
+    if (needs_unwind >= 1 && current_angle < 90) {
+        current_angle += 360;
+    } else if (needs_unwind <= -1 && current_angle > 270) {
+        current_angle -= 360;
+    }
+
+    // Calculate shortest path error
+    float error = target_angle - current_angle;
+    if (error > 180) {
+        error -= 360;
+    } else if (error < -180) {
+        error += 360;
+    }
+
+    // Handle unwinding requirements
+    if (target_angle == 0 || ((current_angle + error) > 360 || (current_angle + error) < 0)) {
+        if (needs_unwind <= -1) {
+            error = (error > 180) ? error : error + 360;
+        } else if (needs_unwind >= 1) {
+            error = (error > -180) ? error - 360 : error;
+        }
+    }
+
+    setErrorAz(error);
+}
+
+void MotorSensorController::angle_error_el(float target_angle, float current_angle) {
+    // Normalize angles
+    target_angle = fmod(target_angle, 360);
+    current_angle = fmod(current_angle, 360);
+    
+    // Calculate shortest path error
+    float error = target_angle - current_angle;
+    if (error > 180) {
+        error -= 360;
+    } else if (error < -180) {
+        error += 360;
+    }
+
+    setErrorEl(error);
+}
+
+float MotorSensorController::correctAngle(float startAngle, float inputAngle) {
+    float correctedAngle = inputAngle - startAngle;
+    if (correctedAngle < 0) {
+        correctedAngle += 360;
+    }
+    return correctedAngle;
+}
+
+void MotorSensorController::calcIfNeedsUnwind(float correctedAngle_az) {
+    // Determine current quadrant (1: 0-90, 2: 91-180, 3: 181-270, 4: 271-359)
+    _quadrantNumber_az = (correctedAngle_az <= 90) ? 1 :
+                        (correctedAngle_az <= 180) ? 2 :
+                        (correctedAngle_az <= 270) ? 3 : 4;
+    
+    // Check for quadrant transitions
+    if (_quadrantNumber_az != _previousquadrantNumber_az) {
+        if (!calMode) {
+            // Handle unwinding logic at 180-degree crossings
+            if (_quadrantNumber_az == 2 && _previousquadrantNumber_az == 3) {
+                needs_unwind--;
+            } else if (_quadrantNumber_az == 3 && _previousquadrantNumber_az == 2) {
+                needs_unwind++;
+            }
+        }
+        _previousquadrantNumber_az = _quadrantNumber_az;
+    }
+}
+
+// =============================================================================
+// SENSOR READING AND I2C COMMUNICATION
+// =============================================================================
+
+float MotorSensorController::getAvgAngle(int i2c_addr) {
+    if (_getAngleMutex == NULL || xSemaphoreTake(_getAngleMutex, portMAX_DELAY) != pdTRUE) {
+        _logger.error("Failed to take mutex in getAvgAngle");
+        badAngleFlag = true;
+        return 0;
+    }
+
+    // Verify magnet presence before reading
+    int magnetStatus = checkMagnetPresence(i2c_addr);
+    if ((magnetStatus & 32) == 0) {
+        _logger.error("MAGNET WENT MISSING DURING ROUTINE ANGLE READ!");
+        magnetFault = true;
+    }
+
+    float angles[_numAvg];
+    int validReadings = 0;
+    int errorCounter = 0;
+    const int MAX_ATTEMPTS = _numAvg * 2;
+    
+    // Collect angle readings
+    for (int attempt = 0; attempt < MAX_ATTEMPTS && validReadings < _numAvg; attempt++) {
+        float rawAngle = ReadRawAngle(i2c_addr);
+        
+        if (rawAngle != -999) {
+            angles[validReadings++] = rawAngle;
+        } else {
+            errorCounter++;
+            if (errorCounter > _numAvg) break;
+        }
+        
+        delayMicroseconds(100);
+    }
+
+    // Handle insufficient readings
+    if (validReadings == 0) {
+        xSemaphoreGive(_getAngleMutex);
+        _logger.error("Failed to get any valid angle readings");
+        badAngleFlag = true;
+        return 0;
+    }
+
+    float angleMean = calculateAngleMeanWithDiscard(angles, validReadings);
+    xSemaphoreGive(_getAngleMutex);
+    
+    return angleMean;
+}
+
+float MotorSensorController::ReadRawAngle(int i2c_addr) {
+    uint8_t buffer[2];
+    const unsigned long timeout = 3000;
+
+    // Request angle data
+    Wire.beginTransmission(i2c_addr);
+    Wire.write(0x0C);
+    byte error = Wire.endTransmission(false);
+
+    if (error != 0) {
+        _logger.error("I2C error during transmission to sensor 0x" + String(i2c_addr, HEX) + ": " + String(error));
+        updateI2CErrorCounter(i2c_addr);
+        return -999;
+    }
+
+    delayMicroseconds(25);
+    byte bytesReceived = Wire.requestFrom(i2c_addr, 2);
+
+    if (bytesReceived != 2) {
+        _logger.error("I2C error: Requested 2 bytes but received " + String(bytesReceived) + " from 0x" + String(i2c_addr, HEX));
+        updateI2CErrorCounter(i2c_addr);
+        return -999;
+    }
+
+    resetI2CErrorCounter(i2c_addr);
+
+    // Timeout check
+    unsigned long startTime = millis();
+    while (Wire.available() < 2) {
+        if (millis() - startTime > timeout) {
+            _logger.error("Timeout waiting for bytes from hall sensor");
+            return -999;
+        }
+    }
+
+    // Read and process data
+    Wire.readBytes(buffer, 2);
+    word rawAngleValue = ((uint16_t)buffer[0] << 8) | buffer[1];
+    return rawAngleValue * 0.087890625; // Convert to degrees
+}
+
+int MotorSensorController::checkMagnetPresence(int i2c_addr) {
+    int magnetStatus = 0;
+    byte error;
+    
+    while (true) {
+        Wire.beginTransmission(i2c_addr);
+        Wire.write(0x0B); // Status register
+        error = Wire.endTransmission();
+        
+        if (error != 0) {
+            _logger.error("I2C error during transmission to sensor 0x" + String(i2c_addr, HEX) + ": " + String(error));
+            updateI2CErrorCounter(i2c_addr);
+            
+            // Check consecutive error limit
+            if ((i2c_addr == _az_hall_i2c_addr && _consecutivei2cErrors_az > MAX_CONSECUTIVE_ERRORS) ||
+                (i2c_addr == _el_hall_i2c_addr && _consecutivei2cErrors_el > MAX_CONSECUTIVE_ERRORS)) {
+                if (i2c_addr == _az_hall_i2c_addr) i2cErrorFlag_az = true;
+                else i2cErrorFlag_el = true;
+                return -999;
+            }
+            continue;
+        }
+        
+        Wire.requestFrom(i2c_addr, 1);
+        while (Wire.available() == 0);
+        magnetStatus = Wire.read();
+        break;
+    }
+
+    resetI2CErrorCounter(i2c_addr);
+    return magnetStatus;
+}
+
+float MotorSensorController::calculateAngleMeanWithDiscard(float* array, int size) {
+    float x[size], y[size];
+
+    // Convert angles to unit vectors
+    for (int i = 0; i < size; i++) {
+        float angleRad = array[i] * PI / 180.0;
+        x[i] = cos(angleRad);
+        y[i] = sin(angleRad);
+    }
+
+    // Calculate means
+    float xSum = 0, ySum = 0;
+    for (int i = 0; i < size; i++) {
+        xSum += x[i];
+        ySum += y[i];
+    }
+    float xMean = xSum / size;
+    float yMean = ySum / size;
+
+    // Calculate standard deviations
+    float sumX = 0, sumY = 0;
+    for (int i = 0; i < size; i++) {
+        sumX += pow(x[i] - xMean, 2);
+        sumY += pow(y[i] - yMean, 2);
+    }
+    float stdDevX = sqrt(sumX / (size > 1 ? size - 1 : 1));
+    float stdDevY = sqrt(sumY / (size > 1 ? size - 1 : 1));
+
+    // Calculate final mean excluding outliers
+    xSum = ySum = 0;
+    for (int i = 0; i < size; i++) {
+        if ((fabs(x[i] - xMean) <= 2.0 * stdDevX) && (fabs(y[i] - yMean) <= 2.0 * stdDevY)) {
+            xSum += x[i];
+            ySum += y[i];
+        }
+    }
+
+    return atan2(ySum, xSum) * 180.0 / PI;
+}
+
+// =============================================================================
+// SETPOINT AND ANGLE ACCESS METHODS
+// =============================================================================
+
+void MotorSensorController::setSetPointAz(float value) {
+    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
+        _setpoint_az = value;
+        _setPointAzUpdated = true;
+        xSemaphoreGive(_setPointMutex);
+    }
+}
+
+void MotorSensorController::setSetPointEl(float value) {
+    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
+        _setpoint_el = value;
+        _setPointElUpdated = true;
+        xSemaphoreGive(_setPointMutex);
+    }
+}
+
+float MotorSensorController::getSetPointAz() {
+    float result = 0;
+    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
+        result = _setpoint_az;
+        xSemaphoreGive(_setPointMutex);
+    }
+    return result;
+}
+
+float MotorSensorController::getSetPointEl() {
+    float result = 0;
+    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
+        result = _setpoint_el;
+        xSemaphoreGive(_setPointMutex);
+    }
+    return result;
+}
+
+void MotorSensorController::setCorrectedAngleAz(float value) {
+    if (_correctedAngleMutex != NULL && xSemaphoreTake(_correctedAngleMutex, portMAX_DELAY) == pdTRUE) {
+        _correctedAngle_az = value;
+        xSemaphoreGive(_correctedAngleMutex);
+    }
+}
+
+void MotorSensorController::setCorrectedAngleEl(float value) {
+    if (_correctedAngleMutex != NULL && xSemaphoreTake(_correctedAngleMutex, portMAX_DELAY) == pdTRUE) {
+        _correctedAngle_el = value;
+        xSemaphoreGive(_correctedAngleMutex);
+    }
+}
+
+float MotorSensorController::getCorrectedAngleAz() {
+    float result = 0;
+    if (_correctedAngleMutex != NULL && xSemaphoreTake(_correctedAngleMutex, portMAX_DELAY) == pdTRUE) {
+        result = _correctedAngle_az;
+        xSemaphoreGive(_correctedAngleMutex);
+    }
+    return result;
+}
+
+float MotorSensorController::getCorrectedAngleEl() {
+    float result = 0;
+    if (_correctedAngleMutex != NULL && xSemaphoreTake(_correctedAngleMutex, portMAX_DELAY) == pdTRUE) {
+        result = _correctedAngle_el;
+        xSemaphoreGive(_correctedAngleMutex);
+    }
+    return result;
+}
+
+double MotorSensorController::getErrorAz() {
+    double result = 0;
+    if (_errorMutex != NULL && xSemaphoreTake(_errorMutex, portMAX_DELAY) == pdTRUE) {
+        result = _error_az;
+        xSemaphoreGive(_errorMutex);
+    }
+    return result;
+}
+
+void MotorSensorController::setErrorAz(float value) {
+    if (_errorMutex != NULL && xSemaphoreTake(_errorMutex, portMAX_DELAY) == pdTRUE) {
+        _error_az = value;
+        xSemaphoreGive(_errorMutex);
+    }
+}
+
+double MotorSensorController::getErrorEl() {
+    double result = 0;
+    if (_errorMutex != NULL && xSemaphoreTake(_errorMutex, portMAX_DELAY) == pdTRUE) {
+        result = _error_el;
+        xSemaphoreGive(_errorMutex);
+    }
+    return result;
+}
+
+void MotorSensorController::setErrorEl(float value) {
+    if (_errorMutex != NULL && xSemaphoreTake(_errorMutex, portMAX_DELAY) == pdTRUE) {
+        _error_el = value;
+        xSemaphoreGive(_errorMutex);
+    }
+}
+
+float MotorSensorController::getElStartAngle() {
+    float result = 0;
+    if (_el_startAngleMutex != NULL && xSemaphoreTake(_el_startAngleMutex, portMAX_DELAY) == pdTRUE) {
+        result = _el_startAngle;
+        xSemaphoreGive(_el_startAngleMutex);
+    }
+    return result;
+}
+
+void MotorSensorController::setElStartAngle(float value) {
+    if (_el_startAngleMutex != NULL && xSemaphoreTake(_el_startAngleMutex, portMAX_DELAY) == pdTRUE) {
+        _preferences.putFloat("el_cal", value);
+        _el_startAngle = value;
+        xSemaphoreGive(_el_startAngleMutex);
+    }
+}
+
+int MotorSensorController::getMaxPowerBeforeFault() {
+    return _maxPowerBeforeFault;
+}
+
+void MotorSensorController::setMaxPowerBeforeFault(int value) {
+    if (value > 0 && value < 25) {
+        _maxPowerBeforeFault = value;
+        _preferences.putInt("MAX_POWER", value);
+    }
+}
+
+// =============================================================================
+// CONFIGURATION PARAMETER SETTERS
+// =============================================================================
+
+void MotorSensorController::setPEl(int value) {
+    if (value > 0 && value <= 1000) {
+        P_el = value;
+        _preferences.putInt("P_el", value);
+        _logger.info("P_el set to: " + String(value));
+    }
+}
+
+void MotorSensorController::setPAz(int value) {
+    if (value > 0 && value <= 1000) {
+        P_az = value;
+        _preferences.putInt("P_az", value);
+        _logger.info("P_az set to: " + String(value));
+    }
+}
+
+void MotorSensorController::setMinElSpeed(int value) {
+    if (value >= 0 && value <= 255) {
+        MIN_EL_SPEED = value;
+        _preferences.putInt("MIN_EL_SPEED", value);
+        _logger.info("MIN_EL_SPEED set to: " + String(value));
+    }
+}
+
+void MotorSensorController::setMinAzSpeed(int value) {
+    if (value >= 0 && value <= 255) {
+        MIN_AZ_SPEED = value;
+        _preferences.putInt("MIN_AZ_SPEED", value);
+        _logger.info("MIN_AZ_SPEED set to: " + String(value));
+    }
+}
+
+void MotorSensorController::setMinAzTolerance(float value) {
+    if (value > 0 && value <= 10.0) {
+        _MIN_AZ_TOLERANCE = value;
+        _preferences.putFloat("MIN_AZ_TOL", value);
+        _logger.info("MIN_AZ_TOLERANCE set to: " + String(value));
+    }
+}
+
+void MotorSensorController::setMinElTolerance(float value) {
+    if (value > 0 && value <= 10.0) {
+        _MIN_EL_TOLERANCE = value;
+        _preferences.putFloat("MIN_EL_TOL", value);
+        _logger.info("MIN_EL_TOLERANCE set to: " + String(value));
+    }
+}
+
+// =============================================================================
+// CALIBRATION METHODS
+// =============================================================================
+
+void MotorSensorController::activateCalMode(bool on) {
+    if (on) {
+        calMode = true;
+        global_fault = false;
+        setPWM(_pwm_pin_az, 255);
+        setPWM(_pwm_pin_el, 255);
+        _logger.info("calMode set to true");
+    } else {
+        calMode = false;
+        _logger.info("calMode set to false");
+    }
+}
+
+void MotorSensorController::calMoveMotor(const String& runTimeStr, const String& axis) {
+    if (!calMode) {
+        Serial.println("Calibration mode OFF; ignoring calMove request.");
+        return;
+    }
+
+    _calRunTime = runTimeStr.toInt();
+    _calAxis = axis;
+}
+
+void MotorSensorController::calibrate_elevation() {
+    if (calMode) {
+        float tareAngle = getAvgAngle(_el_hall_i2c_addr);
+        setElStartAngle(tareAngle);
+        Serial.println("EL CAL DONE");
+    }
+}
+
+void MotorSensorController::handleCalibrationMode() {
+    if (_calState == 0) {
+        if (abs(_calRunTime) > 0 && _calAxis != "") {
+            _calMoveStartTime = millis();
+            _calState = 1;
+        } else {
+            analogWrite(_pwm_pin_az, 255);
+            analogWrite(_pwm_pin_el, 255);
+            digitalWrite(_pwm_pin_az, 1);
+            digitalWrite(_pwm_pin_el, 1);
+        }
+    } else if (_calState == 1) {
+        int directionPin, pwmPin;
+        
+        if (_calAxis.equalsIgnoreCase("AZ")) {
+            directionPin = _ccw_pin_az;
+            pwmPin = _pwm_pin_az;
+        } else if (_calAxis.equalsIgnoreCase("EL")) {
+            directionPin = _ccw_pin_el;
+            pwmPin = _pwm_pin_el;
+        }
+        
+        digitalWrite(directionPin, _calRunTime > 0);
+        analogWrite(pwmPin, 0);
+
+        unsigned long elapsedTime = millis() - _calMoveStartTime;
+        if (elapsedTime > abs(_calRunTime)) {
+            analogWrite(_pwm_pin_az, 255);
+            analogWrite(_pwm_pin_el, 255);
+            _calRunTime = 0;
+            _calAxis = "";
+            _calState = 0;
+        }
+    }
+}
+
+// =============================================================================
+// UTILITY METHODS
+// =============================================================================
+
+void MotorSensorController::handleOscillationDetection() {
+    // Update needs_unwind in preferences when changed (outside calibration mode)
+    if (needs_unwind != _prev_needs_unwind && !calMode) {
+        _preferences.putInt("needs_unwind", needs_unwind);
+        _prev_needs_unwind = needs_unwind;
+
+        _logger.warn("THIS SHOULD NOT BE RUNNING CONSTANTLY OR THE EEPROM COULD CORRUPT");
+
+        // Start or continue oscillation detection
+        if (!_oscillationTimerActive) {
+            _oscillationTimerStart = millis();
+            _oscillationTimerActive = true;
+            _oscillationCount = 1;
+            _logger.info("Oscillation detection timer started");
+        } else {
+            _oscillationCount++;
+            _logger.info("Oscillation count: " + String(_oscillationCount));
+            
+            // Check for excessive oscillation
+            if (_oscillationCount >= 10) {
+                float currentAngle = getCorrectedAngleAz();
+                float newSetpoint = (currentAngle <= 180.0) ? currentAngle - 1 : currentAngle + 1;
+                
+                _logger.warn("Excessive oscillation detected! Moving " + String((currentAngle <= 180.0) ? "-1°" : "+1°"));
+                setSetPointAz(newSetpoint);
+                
+                _oscillationTimerActive = false;
+                _oscillationCount = 0;
+            }
+        }
+    }
+
+    // Reset timer after 60 seconds
+    if (_oscillationTimerActive && (millis() - _oscillationTimerStart >= 60000)) {
+        _oscillationTimerActive = false;
+        _oscillationCount = 0;
+        _logger.info("Oscillation detection timer expired, count was: " + String(_oscillationCount));
+    }
+}
+
+void MotorSensorController::slowPrint(const String& message, int messageID) {
+    static unsigned long lastPrintTimes[10] = {0};
+    const unsigned long printDelay = 1000;
+    
+    unsigned long currentTime = millis();
+    if (currentTime - lastPrintTimes[messageID] >= printDelay) {
+        _logger.error(message);
+        lastPrintTimes[messageID] = currentTime;
+    }
+}
+
+void MotorSensorController::updateI2CErrorCounter(int i2c_addr) {
+    if (i2c_addr == _az_hall_i2c_addr) {
+        _consecutivei2cErrors_az++;
+        if (_consecutivei2cErrors_az >= MAX_CONSECUTIVE_ERRORS) {
+            i2cErrorFlag_az = true;
+        }
+    } else if (i2c_addr == _el_hall_i2c_addr) {
+        _consecutivei2cErrors_el++;
+        if (_consecutivei2cErrors_el >= MAX_CONSECUTIVE_ERRORS) {
+            i2cErrorFlag_el = true;
+        }
+    }
+}
+
+void MotorSensorController::resetI2CErrorCounter(int i2c_addr) {
+    if (i2c_addr == _az_hall_i2c_addr) {
+        _consecutivei2cErrors_az = 0;
+    } else if (i2c_addr == _el_hall_i2c_addr) {
+        _consecutivei2cErrors_el = 0;
+    }
+}
+
+int MotorSensorController::convertPercentageToSpeed(float percentage) {
+    return (int)((1 - (percentage / 100.0)) * MIN_AZ_SPEED);
+}
+
+int MotorSensorController::convertSpeedToPercentage(float speed) {
+    return (int)(100 * (1 - (speed / MIN_AZ_SPEED)));
+}
+
+void MotorSensorController::playOdeToJoy() {
+    // Stop motors and enter calibration mode temporarily
+    setPWM(_pwm_pin_az, 255);
+    setPWM(_pwm_pin_el, 255);
+    
+    bool previousCalMode = calMode;
+    activateCalMode(true);
+    
+    // Musical note frequencies
+    const int NOTE_D3 = 147, NOTE_CS4 = 277, NOTE_D4 = 294, NOTE_E4 = 330;
+    const int NOTE_FS4 = 370, NOTE_G4 = 392, NOTE_A4 = 440, NOTE_B4 = 494;
+    
+    // Ode to Joy melody
+    const int melody[] = {
+        NOTE_E4, NOTE_E4, NOTE_FS4, NOTE_G4, NOTE_G4, NOTE_FS4, NOTE_E4, NOTE_D4,
+        NOTE_CS4, NOTE_CS4, NOTE_D4, NOTE_E4, NOTE_E4, NOTE_D4, NOTE_D4,
+        NOTE_E4, NOTE_E4, NOTE_FS4, NOTE_G4, NOTE_G4, NOTE_FS4, NOTE_E4, NOTE_D4,
+        NOTE_CS4, NOTE_CS4, NOTE_D4, NOTE_E4, NOTE_D4, NOTE_CS4, NOTE_CS4,
+        NOTE_D4, NOTE_D4, NOTE_E4, NOTE_CS4, NOTE_D4, NOTE_E4, NOTE_FS4, NOTE_E4,
+        NOTE_CS4, NOTE_D4, NOTE_E4, NOTE_FS4, NOTE_E4, NOTE_D4, NOTE_CS4, NOTE_D4, NOTE_D3
+    };
+
+    const int noteDurations[] = {
+        250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 375, 125, 500,
+        250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 250, 375, 125, 500,
+        250, 250, 250, 250, 250, 125, 125, 250, 250, 250, 125, 125, 250, 250, 250, 250, 250
+    };
+    
+    int musicPin = _pwm_pin_az;
+    const int soundPWM = 128;
+    
+    // Play melody
+    digitalWrite(_ccw_pin_az, 1);
+    Serial.println("Playing Ode to Joy on motors...");
+    
+    for (int noteIndex = 0; noteIndex < sizeof(melody)/sizeof(melody[0]); noteIndex++) {
+        analogWriteFrequency(musicPin, melody[noteIndex]);   
+        analogWrite(musicPin, soundPWM);
+        delay(noteDurations[noteIndex]);
+        analogWrite(musicPin, 255);
+        delay(30);
+    }
+    
+    // Reset and restore state
+    analogWriteFrequency(musicPin, FREQ);
+    setPWM(musicPin, 255);
+    activateCalMode(previousCalMode);
+    
+    _logger.info("Ode to Joy finished");
+}

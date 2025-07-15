@@ -1,0 +1,631 @@
+<!DOCTYPE HTML>
+
+<!--
+ * Firmware for the discovery-drive satellite dish rotator.
+ * index.html - HTML page for the web UI.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+-->
+
+<html>
+<head>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Discovery Dish Rotator Web Control</title>
+  <meta charset="utf-8">
+  <link rel="stylesheet" type="text/css" href="styles.css">
+</head>
+<body>
+  <div class="section-box">
+    <div class="image-text-container">
+      <img src="Logo-Circle-Cream.png" alt="KrakenSDR Logo" class="logo">
+      <h1>Discovery Dish Rotator <br/> Web Control</h1>
+    </div>
+  </div>
+
+  <div class="section-box">
+    <h2>Manual Azimuth/Elevation Control</h2>
+    <!-- Flex container to position form and canvas side by side -->
+    <div class="control-container az-el-container"> <!-- Added unique class "az-el-container" -->
+      <!-- The form for input -->
+      <form id="az-el-form" action="/update_variable" method="POST" onsubmit="return updateVariable();">
+        <label for="new_setpoint_az">Set Azimuth (-360 - 360):</label>
+        <input type="decimal" id="new_setpoint_az" name="new_setpoint_az" step="0.01" value="0.00">
+        <p id="error_message_az" style="color: red;"></p>
+        <label for="new_setpoint_el">Set Elevation (0 - 90):</label>
+        <input type="decimal" id="new_setpoint_el" name="new_setpoint_el" step="0.01" value="0.00">
+        <p id="error_message_el" style="color: red;"></p>
+        <!-- Button container to align them side by side -->
+        <div class="button-container">
+          <input type="submit" value="Submit">
+          <button type="button" onclick="submitHome()">Home</button>
+        </div>
+      </form>
+      <!-- Canvas element for the AZ-EL skyplane -->
+      <canvas id="skyplaneCanvas" width="350" height="350"></canvas>
+    </div>
+  </div>
+
+  <div class="section-box">
+    <h2>Rotator Status</h2>
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+      </tr>
+      <tr>
+        <td>Corrected Angle Elevation</td>
+        <td><span id="correctedAngle_el">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Corrected Angle Azimuth</td>
+        <td><span id="correctedAngle_az">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Azimuth Setpoint</td>
+        <td><span id="setpoint_az">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Elevation Setpoint</td>
+        <td><span id="setpoint_el">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Azimuth State</td>
+        <td><span id="setPointState_az">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Elevation State</td>
+        <td><span id="setPointState_el">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Azimuth Error</td>
+        <td><span id="error_az">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Elevation Error</td>
+        <td><span id="error_el">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Elevation Tare Angle</td>
+        <td><span id="el_startAngle">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Needs Unwind</td>
+        <td><span id="needs_unwind">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Hall AZ Sensor I2C Error</td>
+        <td><span id="i2cErrorFlag_az">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Hall EL Sensor I2C Error</td>
+        <td><span id="i2cErrorFlag_el">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Bad Angle Error</td>
+        <td><span id="badAngleFlag">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Magnet Error</td>
+        <td><span id="magnetFault">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Fault Tripped</td>
+        <td><span id="faultTripped">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>AZ Motor Latched</td>
+        <td><span id="isAzMotorLatched">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>EL Motor Latched</td>
+        <td><span id="isElMotorLatched">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Serial Active</td>
+        <td><span id="serialActive">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Tolerance AZ</td>
+        <td><span id="toleranceAz">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Tolerance EL</td>
+        <td><span id="toleranceEl">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Input Voltage (V)</td>
+        <td><span id="inputVoltage">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Current Draw (A)</td>
+        <td><span id="currentDraw">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Rotator Power Draw (W)</td>
+        <td><span id="rotatorPowerDraw">Loading...</span></td>
+      </tr>
+    </table>
+
+    <h3>Debug Level Control</h3>
+    <p>Note that Serial Error Output must be disabled if you are using the Serial rotctl interface, or if will interfere with rotctl messages.</p>
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+        <th>Default</th>
+      </tr>
+      <tr>
+        <td>Current Debug Level</td>
+        <td><span id="currentDebugLevel">Loading...</span></td>
+        <td>1 (ERROR)</td>
+      </tr>
+      <tr>
+        <td>Serial Output Disabled</td>
+        <td><span id="serialOutputDisabled">Loading...</span></td>
+        <td>False</td>
+      </tr>
+    </table>
+
+    <form id="debugLevelForm" onsubmit="return setDebugLevel();">
+      <label for="debugLevel">Set Debug Level:</label>
+      <select id="debugLevel" name="debugLevel" onchange="setDebugLevel()">
+        <option value="0">0 - NONE (No logging)</option>
+        <option value="1">1 - ERROR (Errors only)</option>
+        <option value="2">2 - WARN (Warnings and errors)</option>
+        <option value="3">3 - INFO (Info, warnings, errors)</option>
+        <option value="4">4 - DEBUG (Debug and above)</option>
+        <option value="5">5 - VERBOSE (All messages)</option>
+      </select>
+    </form>
+
+    <br/>
+
+    <label>Disable Serial Error Output:</label>
+    <p>
+      <label class="switch">
+        <input type="checkbox" id="disableSerialOutput" onchange="toggleSerialOutput()">
+        <span class="slider"></span>
+      </label>
+    </p>
+
+    <br/>
+
+    <!-- Error Messages Section -->
+    <div class="error-messages-section">
+      <h3>System Messages</h3>
+      <div class="error-messages-container">
+        <button id="pauseScrollBtn" onclick="toggleLogScrollPause()">Pause</button>
+        <button id="clearErrorsBtn" onclick="clearErrorMessages()">Clear Messages</button>
+        <textarea id="errorMessages" readonly placeholder="No system messages..."></textarea>
+      </div>
+    </div>
+
+    <br/>
+  </div>
+
+  <div class="section-box">
+    <h2>Web Connection Setup</h2>
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+        <th>Default</th>
+      </tr>
+      <tr>
+        <td>Current HTTP Port</td>
+        <td><span id="http_port">Loading...</span></td>
+        <td>80</td>
+      </tr>
+      <tr>
+        <td>Current Rotctl Port</td>
+        <td><span id="rotctl_port">Loading...</span></td>
+        <td>4533</td>
+      </tr>
+    </table>
+    <form action='/setPorts' method='POST'>
+      <label for='http_port'>New HTTP Port:</label>
+      <input type='number' id='http_port' name='http_port' min="1" max="65535">
+      <label for='rotctl_port'>New Rotctl Port:</label>
+      <input type='number' id='rotctl_port' name='rotctl_port' min="1" max="65535">
+      <input type='submit' value='Submit'>
+    </form>
+  </div>
+
+  <div class="section-box">
+    <h2>WiFi Setup</h2>
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+      </tr>
+      <tr>
+        <td>Current WiFi SSID</td>
+        <td><span id="wifissid">Loading...</span></td>
+      </tr>
+    </table>
+
+    <form action='/setWiFi' method='POST'>
+      <label for='ssid'>SSID:</label>
+      <input type='text' id='ssid' name='ssid'>
+
+      <label for='password'>Password:</label>
+      <input type='text' id='password' name='password'>
+
+      <!-- Hotspot mode checkbox -->
+      <label for='hotspot'>Activate Hotspot Mode:</label>
+
+      <p>
+        <label class="switch">
+          <input type="checkbox" id="hotspot" name="hotspot" onchange="toggleHotspotMode()">
+          <span class="slider"></span>
+        </label>
+      </p>
+
+      <input type='submit' value='Submit'>
+    </form>
+  </div>
+
+  <div class="section-box">
+    <h2>WiFi Status</h2>
+    <label>Signal Strength: </label>
+    <div id='signalBars'>
+      <div class='signal'>
+        <div id='bar1' class='bar bar1'></div>
+      </div>
+      <div class='signal'>
+        <div id='bar2' class='bar bar2'></div>
+      </div>
+      <div class='signal'>
+        <div id='bar3' class='bar bar3'></div>
+      </div>
+      <div class='signal'>
+        <div id='bar4' class='bar bar4'></div>
+      </div>
+    </div>
+    <br />
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+      </tr>
+      <tr>
+        <td>Rotator IP Address</td>
+        <td><span id="ip_addr">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Rotctl Client IP</td>
+        <td><span id="rotctl_client_ip">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>WiFi RSSI</td>
+        <td><span id="rssi">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>WiFi BSSID (Mac Address)</td>
+        <td><span id="bssid">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>WiFi Channel</td>
+        <td><span id="wifi_channel">Loading...</span></td>
+      </tr>
+    </table>
+    <br />
+  </div>
+
+  <div class="section-box">
+    <h2>Calibration</h2>
+    <p>WARNING: Turning calibration ON has the potentional to permanently break your rotator (especially elevation)! </p>
+    <p>WARNING: Only activate calibration if you know what you are doing! </p>
+
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+      </tr>
+      <tr>
+        <td>Cal Mode</td>
+        <td><span id="calMode">Loading...</span></td>
+      </tr>
+    </table>
+    <br />
+
+    <label>Activate Calibration Mode:</label>
+    <p>
+      <label class="switch">
+        <input type="checkbox" id="toggleCal" onchange="toggleCal()" %var_calmode_checked%>
+        <span class="slider"></span>
+      </label>
+    </p>
+
+    <label>AZ Move: </label>
+    <p>
+      <button onclick="moveAz(3000)">&lt&lt&lt</button>
+      <button onclick="moveAz(600)">&lt&lt</button>
+      <button onclick="moveAz(250)">&lt</button>
+      <button onclick="moveAz(-250)">&gt</button>
+      <button onclick="moveAz(-600)">&gt&gt</button>
+      <button onclick="moveAz(-3000)">&gt&gt&gt</button>
+    </p>
+
+    <label>EL Move: </label>
+    <p>
+      <button onclick="moveEl(-3000)">&lt&lt&lt</button>
+      <button onclick="moveEl(-600)">&lt&lt</button>
+      <button onclick="moveEl(-250)">&lt</button>
+      <button onclick="moveEl(250)">&gt</button>
+      <button onclick="moveEl(600)">&gt&gt</button>
+      <button onclick="moveEl(3000)">&gt&gt&gt</button>
+    </p>
+    <p>
+      <button onclick="calEl()">Tare Elevation</button>
+    </p>
+    <br />
+  </div>
+
+  <div class="section-box">
+    <h2>Motor Settings</h2>
+    <p>If you have heavy power budget limitations, you can limit the max speed. Note that this naturally limits the max torque. Max speed restrictions only apply when both motors are moving.</p>
+    <p>Dual Motor Max Speed: The maximum speed the motors should run at when both motors are used at the same time </p>
+    <p>Single Motor Max Speed: The maximum speed the motors should run at when used in single motor mode, or when in dual motor mode, but one motor is not running</p>
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+        <th>Default</th>
+      </tr>
+      <tr>
+        <td>Max Dual Motor Azimuth Speed</td>
+        <td><span id="maxDualMotorAzSpeed">Loading...</span>%</td>
+        <td>100%</td>
+      </tr>
+      <tr>
+        <td>Max Dual Motor Elevation Speed</td>
+        <td><span id="maxDualMotorElSpeed">Loading...</span>%</td>
+        <td>100%</td>
+      </tr>
+      <tr>
+        <td>Max Single Motor Azimuth Speed</td>
+        <td><span id="maxSingleMotorAzSpeed">Loading...</span>%</td>
+        <td>100%</td>
+      </tr>
+      <tr>
+        <td>Max Single Motor Elevation Speed</td>
+        <td><span id="maxSingleMotorElSpeed">Loading...</span>%</td>
+        <td>100%</td>
+      </tr>
+      <tr>
+        <td>Single Motor Mode</td>
+        <td><span id="singleMotorModeText">Loading...</span></td>
+        <td>OFF</td>
+      </tr>
+    </table>
+
+    <form action='/setDualMotorMaxSpeed' method='POST'>
+      <label for='maxDualMotorAzSpeed'>Max Dual Motor Azimuth Speed:</label>
+      <input type='number' id='maxDualMotorAzSpeed' name='maxDualMotorAzSpeed' min='0' max='100'>
+      <label for='maxDualMotorElSpeed'>Max Dual Motor Elevation Speed:</label>
+      <input type='number' id='maxDualMotorElSpeed' name='maxDualMotorElSpeed' min='0' max='100'>
+      <input type='submit' value='Submit'>
+    </form>
+
+    <form action='/setSingleMotorMaxSpeed' method='POST'>
+      <label for='maxSingleMotorAzSpeed'>Max Single Motor Azimuth Speed:</label>
+      <input type='number' id='maxSingleMotorAzSpeed' name='maxSingleMotorAzSpeed' min='0' max='100'>
+      <label for='maxSingleMotorElSpeed'>Max Single Motor Elevation Speed:</label>
+      <input type='number' id='maxSingleMotorElSpeed' name='maxSingleMotorElSpeed' min='0' max='100'>
+      <input type='submit' value='Submit'>
+    </form>
+
+    <label>Single Motor Mode:</label>
+    <p>
+      <label class="switch">
+        <input type="checkbox" id="singleMotorMode" onchange="setSingleMotorMode()" %var_singleMotorMode_checked%>
+        <span class="slider"></span>
+      </label>
+    </p>
+  </div>
+
+  <div class="section-box">
+    <h2>Stellarium Connection Settings</h2>
+    <p>For Stellarium connections make sure that you have the "Remote Control" plugin enabled in Stellarium.</p>
+    <p>Note that turning on Stellarium Polling will disable any rotctl connection.</p>
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+        <th>Default</th>
+      </tr>
+      <tr>
+        <td>Stellarium Polling On</td>
+        <td><span id="stellariumPollingOn">Loading...</span></td>
+        <td>OFF</td>
+      </tr>
+      <tr>
+        <td>Stellarium Server IP</td>
+        <td><span id="stellariumServerIPText">Loading...</span></td>
+        <td>-</td>
+      </tr>
+      <tr>
+        <td>Stellarium Server Port</td>
+        <td><span id="stellariumServerPortText">Loading...</span></td>
+        <td>8090</td>
+      </tr>
+      <tr>
+        <td>Stellarium Connection Active</td>
+        <td><span id="stellariumConnActive">Loading...</span></td>
+        <td>Disconnected</td>
+      </tr>
+    </table>
+    <br/>
+
+    <label>Stellarium Polling:</label>
+    <p>
+      <label class="switch">
+        <input type="checkbox" id="stellariumOn" onchange="stellariumOn()" %var_stellariumOn_checked%>
+        <span class="slider"></span>
+      </label>
+    </p>
+
+    <form action='/setStellarium' method='POST'>
+      <label for='stellariumServerIP'>Stellarium Server IP:</label>
+      <input type='text' id='stellariumServerIP' name='stellariumServerIP'>
+      <label for='stellariumServerPort'>Stellarium Server Port:</label>
+      <input type='number' id='stellariumServerPort' name='stellariumServerPort'>
+      <input type='submit' value='Submit'>
+    </form>
+  </div>
+
+  <div class="section-box">
+    <h2>ESP32 Control Panel & Security</h2>
+    <p>Set Optional Login Username and Password to Blank to Disable </p>
+    <p>Warning! Remember your username and password! The only way to reset the password is by using command "RESET_WEB_PW" on the serial interface. </p>
+
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+      </tr>
+      <tr>
+        <td>Password Active</td>
+        <td><span id="passwordStatus">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Current Username</td>
+        <td><span id="loginUser">Loading...</span></td>
+      </tr>
+    </table>
+
+    <form action='/setPassword' method='POST'>
+      <label for='loginUser'>Username:</label>
+      <input type='text' id='loginUser' name='loginUser'>
+      <label for='loginPassword'>Password:</label>
+      <input type='text' id='loginPassword' name='loginPassword'>
+      <input type='submit' value='Submit'>
+    </form>
+
+    <button type="button" onclick="confirmRestartESP32()" style="background-color: #dc3545;">Restart ESP32</button>
+
+    <button type="button" onclick="confirmResetNeedsUnwind()" style="background-color: #dc3545;">Reset Needs Unwind</button>
+
+    <button type="button" onclick="confirmResetEEPROM()" style="background-color: #dc3545;">Reset EEPROM</button>
+  </div>
+
+  <div class="section-box">
+    <h2>Firmware & Web Assets Update</h2>
+    <p>Update firmware (.bin files) and web interface files separately</p>
+    <p><strong>Supported files:</strong> .bin (firmware), .html, .css, .js, .png, .jpg, .jpeg</p>
+    <p><strong>Maximum file size:</strong> 3MB per upload</p>
+
+    <form action="/ota" method="GET">
+      <button type="submit">Go to OTA Update Page</button>
+    </form>
+
+    <br/>
+    <p><strong>Warning:</strong> Firmware updates will restart the device. Web file updates take effect immediately.</p>
+  </div>
+
+  <div class="section-box">
+    <h2>Advanced Motor Parameters</h2>
+    <p><strong>WARNING:</strong> Only modify these parameters if you understand their impact on motor control behavior.</p>
+
+    <label>Show Advanced Parameters:</label>
+    <p>
+      <label class="switch">
+        <input type="checkbox" id="showAdvanced" onchange="toggleAdvancedParams()">
+        <span class="slider"></span>
+      </label>
+    </p>
+
+    <div id="advancedParamsSection" style="display: none;">
+      <table>
+        <tr>
+          <th>Parameter</th>
+          <th>Value</th>
+          <th>Range</th>
+          <th>Description</th>
+        </tr>
+        <tr>
+          <td>P_el (Elevation P-Gain)</td>
+          <td><span id="P_el">Loading...</span></td>
+          <td>1-1000</td>
+          <td>Proportional gain for elevation motor control. Default: 100</td>
+        </tr>
+        <tr>
+          <td>P_az (Azimuth P-Gain)</td>
+          <td><span id="P_az">Loading...</span></td>
+          <td>1-1000</td>
+          <td>Proportional gain for azimuth motor control. Default: 5</td>
+        </tr>
+        <tr>
+          <td>MIN_EL_SPEED</td>
+          <td><span id="MIN_EL_SPEED">Loading...</span></td>
+          <td>0-255</td>
+          <td>Minimum PWM speed for elevation motor. Lower is faster. Default: 50</td>
+        </tr>
+        <tr>
+          <td>MIN_AZ_SPEED</td>
+          <td><span id="MIN_AZ_SPEED">Loading...</span></td>
+          <td>0-255</td>
+          <td>Minimum PWM speed for azimuth motor. Lower is faster. Default: 150</td>
+        </tr>
+        <tr>
+          <td>MIN_AZ_TOLERANCE</td>
+          <td><span id="MIN_AZ_TOLERANCE">Loading...</span>°</td>
+          <td>0.1-10.0</td>
+          <td>Initial azimuth tolerance when moving. Default: 0.5°</td>
+        </tr>
+        <tr>
+          <td>MIN_EL_TOLERANCE</td>
+          <td><span id="MIN_EL_TOLERANCE">Loading...</span>°</td>
+          <td>0.1-10.0</td>
+          <td>Initial elevation tolerance when moving. Default: 0.1°</td>
+        </tr>
+        <tr>
+          <td>MAX_FAULT_POWER</td>
+          <td><span id="MAX_FAULT_POWER">Loading...</span>W</td>
+          <td>0-25</td>
+          <td>Max power draw before a fault is raised. Default: 10W</td>
+        </tr>
+      </table>
+
+      <form action='/setAdvancedParams' method='POST'>
+        <label for='P_el'>P_el (Elevation P-Gain):</label>
+        <input type='number' id='P_el_input' name='P_el' min='1' max='1000' step='1'>
+
+        <label for='P_az'>P_az (Azimuth P-Gain):</label>
+        <input type='number' id='P_az_input' name='P_az' min='1' max='1000' step='1'>
+
+        <label for='MIN_EL_SPEED'>MIN_EL_SPEED:</label>
+        <input type='number' id='MIN_EL_SPEED_input' name='MIN_EL_SPEED' min='0' max='255' step='1'>
+
+        <label for='MIN_AZ_SPEED'>MIN_AZ_SPEED:</label>
+        <input type='number' id='MIN_AZ_SPEED_input' name='MIN_AZ_SPEED' min='0' max='255' step='1'>
+
+        <label for='MIN_AZ_TOLERANCE'>MIN_AZ_TOLERANCE (degrees):</label>
+        <input type='number' id='MIN_AZ_TOLERANCE_input' name='MIN_AZ_TOLERANCE' min='0.1' max='10.0' step='0.1'>
+
+        <label for='MIN_EL_TOLERANCE'>MIN_EL_TOLERANCE (degrees):</label>
+        <input type='number' id='MIN_EL_TOLERANCE_input' name='MIN_EL_TOLERANCE' min='0.1' max='10.0' step='0.1'>
+
+        <label for='MAX FAULT POWER'>MAX FAULT POWER (watts):</label>
+        <input type='number' id='MAX_FAULT_POWER_input' name='MAX_FAULT_POWER' min='0' max='25' step='1'>
+
+        <input type='submit' value='Update Advanced Parameters'>
+      </form>
+    </div>
+  </div>
+
+  <script src="/script.js"></script>
+</body>
+</html>

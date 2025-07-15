@@ -1,0 +1,444 @@
+/*
+ * Firmware for the discovery-drive satellite dish rotator.
+ * styles.css - CSS File for the web UI.
+ *
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program.  If not, see <http://www.gnu.org/licenses/>.
+ */
+
+/* General layout adjustments */
+body {
+  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  background-color: #f7f7f7;
+  color: #333;
+  text-align: center;
+  font-size: 16px;
+}
+
+h1, h2 {
+  color: #0056b3;
+  margin-top: 20px;
+}
+
+p {
+  font-size: 1.1em;
+  padding: 10px;
+}
+
+/* Style for section boxes */
+.section-box {
+  background-color: #fff;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  padding: 20px;
+  margin: 20px auto;
+  max-width: 700px;
+  box-shadow: 0px 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.section-box h2 {
+  margin-top: 0; /* Remove extra margin at the top of the heading */
+}
+
+/* Form and input styling */
+form {
+  margin: 20px;
+  padding: 15px;
+  background-color: #ffffff;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  max-width: 500px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+label {
+  font-size: 1.1em;
+  display: block;
+  margin-bottom: 10px;
+  font-weight: bold;
+}
+
+/* Ensure input elements take full width inside the form */
+input[type="text"],
+input[type="number"],
+input[type="decimal"],
+input[type="password"],
+select {
+  width: 100%;
+  padding: 12px;
+  margin-bottom: 15px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  font-size: 1em;
+  box-sizing: border-box; /* Ensures padding and border are included in the width */
+}
+
+/* Buttons: Centered and short */
+button, input[type="submit"] {
+  display: inline-block;
+  width: auto;
+  padding: 12px 24px; /* Taller and slightly wider */
+  margin: 10px;
+  background-color: #4CAF50;
+  color: white;
+  border: none;
+  border-radius: 5px;
+  font-size: 1.1em;
+  cursor: pointer;
+  text-align: center;
+}
+
+button:hover, input[type="submit"]:hover {
+  background-color: #45a049;
+}
+
+/* Center buttons and switches in a flexbox */
+.button-container, .switch-container {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 20px;
+}
+
+/* Style switch */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 60px;
+  height: 34px;
+  margin-left: 15px; /* Add spacing between text and switch */
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: #ccc;
+  transition: 0.4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 26px;
+  width: 26px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  transition: 0.4s;
+}
+
+input:checked + .slider {
+  background-color: #4CAF50;
+}
+
+input:checked + .slider:before {
+  transform: translateX(26px);
+}
+
+.slider.round {
+  border-radius: 34px;
+}
+
+.slider.round:before {
+  border-radius: 50%;
+}
+
+/* Canvas styling */
+canvas {
+  border: 1px solid #ccc;
+  display: block;
+  margin: 20px auto;
+  max-width: 100%;
+}
+
+/* Signal bars */
+.signal {
+  display: inline-block;
+  width: 10px;
+  height: 50px;
+  position: relative;
+  margin-right: 2px;
+}
+
+.bar {
+  width: 100%;
+  position: absolute;
+  background-color: gray;
+  bottom: 0;
+}
+
+.bar1 {
+  height: 20%;
+}
+
+.bar2 {
+  height: 40%;
+}
+
+.bar3 {
+  height: 60%;
+}
+
+.bar4 {
+  height: 80%;
+}
+
+.active {
+  background-color: green;
+}
+
+table {
+  width: 80%;
+  margin: 0 auto;
+  border-collapse: collapse;
+  font-size: 1.1em;
+}
+
+table, th, td {
+  border: 1px solid #ddd;
+}
+
+th, td {
+  padding: 5px;
+  text-align: left;
+}
+
+th {
+  background-color: #f2f2f2;
+}
+
+/* Container for image and text */
+.image-text-container {
+  display: flex;
+  align-items: center; /* Vertically center the title text */
+  justify-content: center; /* Horizontally center the image and text */
+  gap: 20px; /* Adds space between image and text */
+}
+
+/* Style for the logo image */
+.image-text-container .logo {
+  width: 150px;
+  height: auto;
+  margin-right: 20px; /* Space between image and text */
+}
+
+/* Style for the title text */
+.image-text-container h1 {
+  margin: 0;
+  font-size: 2em; /* Adjust the font size as needed */
+  text-align: center;
+}
+
+/* Flexbox for Azimuth/Elevation form and canvas */
+.az-el-container {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: nowrap;
+  gap: 20px;
+}
+
+/* Specific styling for the Azimuth/Elevation form */
+#az-el-form {
+  width: 45%; /* Reduce the form width */
+  padding: 10px;
+  background-color: #ffffff;
+  border: 1px solid #ddd;
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+
+#az-el-form p {
+  margin-top: 2px; /* Reduce the space above the error messages */
+  margin-bottom: 5px; /* Reduce the space below the error messages */
+}
+
+/* Canvas specific styling for AZ-EL skyplane */
+#skyplaneCanvas {
+  border: 1px solid #ccc;
+  max-width: 45%; /* Ensure the canvas doesn't exceed 45% of container width */
+  height: auto; /* Maintain the aspect ratio */
+}
+
+/* Flexbox container to make the text and signal bars align horizontally */
+.rssi-container {
+  display: flex;
+  align-items: center; /* Vertically align the items to the center */
+  gap: 10px; /* Adds space between text and signal bars */
+}
+
+/* Error Messages Section */
+.error-messages-section {
+  margin-top: 20px;
+  padding-top: 20px;
+  border-top: 1px solid #ddd;
+}
+
+.error-messages-section h3 {
+  color: #0056b3;
+  margin-bottom: 10px;
+  margin-top: 0;
+}
+
+.error-messages-container {
+  position: relative;
+}
+
+#pauseScrollBtn {
+  position: absolute;
+  top: 5px;
+  right: 120px;
+  z-index: 10;
+  background-color: #ffc107;
+  color: #856404;
+  border: none;
+  border-radius: 3px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#pauseScrollBtn:hover {
+  background-color: #ffcd39;
+}
+
+#clearErrorsBtn {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  z-index: 10;
+  background-color: #dc3545;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  padding: 5px 10px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#clearErrorsBtn:hover {
+  background-color: #c82333;
+}
+
+#errorMessages {
+  width: 100%;
+  height: 120px;
+  padding: 10px;
+  border: 1px solid #ddd;
+  border-radius: 5px;
+  background-color: #f8f9fa;
+  font-family: 'Courier New', monospace;
+  font-size: 12px;
+  color: #333;
+  resize: vertical;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  box-sizing: border-box;
+}
+
+#errorMessages:empty::placeholder {
+  color: #6c757d;
+  font-style: italic;
+}
+
+/* Style for error state */
+#errorMessages.has-errors {
+  border-color: #dc3545;
+  background-color: #fff5f5;
+}
+
+/* Style for warning state */
+#errorMessages.has-warnings {
+  border-color: #ffc107;
+  background-color: #fffbf0;
+}
+
+/* Scroll paused indicator */
+.scroll-paused-indicator {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  z-index: 10;
+  background-color: #ffc107;
+  color: #856404;
+  border: 1px solid #ffeaa7;
+  border-radius: 3px;
+  padding: 4px 8px;
+  font-size: 11px;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+}
+
+#resumeScrollBtn {
+  background: none;
+  border: none;
+  color: #0056b3;
+  text-decoration: underline;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0;
+  margin-left: 4px;
+}
+
+#resumeScrollBtn:hover {
+  color: #004085;
+}
+
+/* Style for when scroll is paused */
+#errorMessages.scroll-paused {
+  border-color: #ffc107;
+  box-shadow: 0 0 0 2px rgba(255, 193, 7, 0.25);
+}
+
+/* Mobile responsiveness */
+@media only screen and (max-width: 1200px) {
+  h1, h2 {
+    font-size: 1.5em;
+  }
+
+  /* Keep input fields and buttons large */
+  p, label, input[type="text"], input[type="number"], input[type="decimal"], input[type="password"], button, select {
+    font-size: 1.1em; /* Maintain the font size of inputs and buttons */
+  }
+
+  /* Keep buttons large */
+  input[type="submit"], button {
+    padding: 12px 26px; /* Larger padding for bigger buttons */
+    font-size: 1.2em; /* Larger font size for buttons */
+  }
+
+  .az-el-container {
+    flex-direction: column; /* Stack form and canvas on top of each other */
+  }
+
+  #az-el-form label {
+    font-size: 1em;
+  }
+
+  #az-el-form, #skyplaneCanvas {
+    width: 100%; /* Ensure both take full width on smaller screens */
+  }
+}
