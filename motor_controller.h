@@ -116,7 +116,7 @@ public:
     
     // Motor speed configuration
     std::atomic<int> MIN_EL_SPEED = 50;
-    std::atomic<int> MIN_AZ_SPEED = 150;
+    std::atomic<int> MIN_AZ_SPEED = 100;
     std::atomic<int> max_dual_motor_az_speed = MAX_AZ_SPEED;
     std::atomic<int> max_dual_motor_el_speed = MAX_EL_SPEED;
     std::atomic<int> max_single_motor_az_speed = 0;

@@ -38,7 +38,7 @@ void MotorSensorController::begin() {
     P_el = _preferences.getInt("P_el", 100);
     P_az = _preferences.getInt("P_az", 5);
     MIN_EL_SPEED = _preferences.getInt("MIN_EL_SPEED", 50);
-    MIN_AZ_SPEED = _preferences.getInt("MIN_AZ_SPEED", 150);
+    MIN_AZ_SPEED = _preferences.getInt("MIN_AZ_SPEED", 100);
     _MIN_AZ_TOLERANCE = _preferences.getFloat("MIN_AZ_TOL", 1.5);
     _MIN_EL_TOLERANCE = _preferences.getFloat("MIN_EL_TOL", 0.1);
     _maxPowerBeforeFault = _preferences.getInt("MAX_POWER", 10);
