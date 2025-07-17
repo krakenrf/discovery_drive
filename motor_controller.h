@@ -154,7 +154,7 @@ private:
     // Control parameters (configurable)
     int P_el = 100;
     int P_az = 5;
-    float _MIN_AZ_TOLERANCE = 0.5;
+    float _MIN_AZ_TOLERANCE = 1.5;
     float _MIN_EL_TOLERANCE = 0.1;
     std::atomic<int> _maxPowerBeforeFault = 10;
 
