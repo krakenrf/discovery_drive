@@ -111,6 +111,9 @@ public:
     std::atomic<bool> i2cErrorFlag_az = false;
     std::atomic<bool> i2cErrorFlag_el = false;
     
+    // New convergence safety fault flags
+    std::atomic<bool> errorDivergenceFault = false;
+    
     // Motor speed configuration
     std::atomic<int> MIN_EL_SPEED = 50;
     std::atomic<int> MIN_AZ_SPEED = 150;
@@ -141,6 +144,13 @@ private:
     static constexpr int _numAvg = 10;              // Sensor averaging samples
     static constexpr uint8_t MAX_CONSECUTIVE_ERRORS = 5;
 
+    // Error convergence safety constants
+    static constexpr int ERROR_HISTORY_SIZE = 20;              // Number of error samples to track
+    static constexpr unsigned long ERROR_SAMPLE_INTERVAL = 250; // ms between samples (matches control loop)
+    static constexpr float DIVERGENCE_THRESHOLD = 1.1f;        // Factor by which error must increase to trigger fault
+    static constexpr float STALL_THRESHOLD = 0.01f;            // Minimum change rate (degrees/sec) to avoid stall fault
+    static constexpr unsigned long CONVERGENCE_TIMEOUT = 3000; // ms to wait before checking for stalls
+
     // Control parameters (configurable)
     int P_el = 100;
     int P_az = 5;
@@ -170,6 +180,8 @@ private:
     double _prev_error_el = 0.0;
     int _maxAdjustedSpeed_az = 0;
     int _maxAdjustedSpeed_el = 0;
+    bool _jitterAzMotors = false;
+    bool _jitterElMotors = false;
     
     // Angle and positioning state
     float _az_startAngle = 0;
@@ -192,6 +204,26 @@ private:
     String _calAxis = "";
     int _calState = 0;
     unsigned long _calMoveStartTime = 0;
+
+    // Error convergence safety tracking
+    struct ErrorTracker {
+        float errorHistory[ERROR_HISTORY_SIZE];
+        unsigned long timestamps[ERROR_HISTORY_SIZE];
+        int currentIndex;
+        int sampleCount;
+        unsigned long lastSampleTime;
+        unsigned long setpointChangeTime;
+        bool motorShouldBeActive;
+        
+        ErrorTracker() : currentIndex(0), sampleCount(0), lastSampleTime(0), 
+                        setpointChangeTime(0), motorShouldBeActive(false) {
+            memset(errorHistory, 0, sizeof(errorHistory));
+            memset(timestamps, 0, sizeof(timestamps));
+        }
+    };
+    
+    ErrorTracker _azErrorTracker;
+    ErrorTracker _elErrorTracker;
 
     // Thread synchronization
     SemaphoreHandle_t _setPointMutex = NULL;
@@ -219,6 +251,15 @@ private:
     float ReadRawAngle(int i2c_addr);
     int checkMagnetPresence(int i2c_addr);
     float calculateAngleMeanWithDiscard(float* array, int size);
+    
+    // Error convergence safety methods
+    void updateErrorTracking();
+    void checkErrorConvergence();
+    bool isErrorDiverging(const ErrorTracker& tracker, float tolerance);
+    bool isConvergenceStalled(const ErrorTracker& tracker, float tolerance);
+    void resetErrorTracker(ErrorTracker& tracker);
+    float calculateErrorChangeRate(const ErrorTracker& tracker);
+    void checkStall();
     
     // Utility methods
     void slowPrint(const String& message, int messageID);

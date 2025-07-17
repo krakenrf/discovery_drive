@@ -558,13 +558,13 @@
         <tr>
           <td>P_el (Elevation P-Gain)</td>
           <td><span id="P_el">Loading...</span></td>
-          <td>1-1000</td>
+          <td>-1000-1000</td>
           <td>Proportional gain for elevation motor control. Default: 100</td>
         </tr>
         <tr>
           <td>P_az (Azimuth P-Gain)</td>
           <td><span id="P_az">Loading...</span></td>
-          <td>1-1000</td>
+          <td>-1000-1000</td>
           <td>Proportional gain for azimuth motor control. Default: 5</td>
         </tr>
         <tr>
@@ -601,10 +601,10 @@
 
       <form action='/setAdvancedParams' method='POST'>
         <label for='P_el'>P_el (Elevation P-Gain):</label>
-        <input type='number' id='P_el_input' name='P_el' min='1' max='1000' step='1'>
+        <input type='number' id='P_el_input' name='P_el' min='-1000' max='1000' step='1'>
 
         <label for='P_az'>P_az (Azimuth P-Gain):</label>
-        <input type='number' id='P_az_input' name='P_az' min='1' max='1000' step='1'>
+        <input type='number' id='P_az_input' name='P_az' min='-1000' max='1000' step='1'>
 
         <label for='MIN_EL_SPEED'>MIN_EL_SPEED:</label>
         <input type='number' id='MIN_EL_SPEED_input' name='MIN_EL_SPEED' min='0' max='255' step='1'>

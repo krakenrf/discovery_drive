@@ -132,6 +132,12 @@ void MotorSensorController::runControlLoop() {
     angle_shortest_error_az(current_setpoint_az, getCorrectedAngleAz());
     angle_error_el(current_setpoint_el, getCorrectedAngleEl());
 
+    // Update error tracking for convergence safety
+    if (!calMode) {
+        updateErrorTracking();
+        checkStall();
+    }
+
     // Execute control logic
     if (!calMode) {
         updateMotorControl(current_setpoint_az, current_setpoint_el, setPointAzUpdated, setPointElUpdated);
@@ -218,6 +224,17 @@ void MotorSensorController::runSafetyLoop() {
         hasNewErrors = true;
     }
 
+    // Check error convergence safety (only when not in calibration mode)
+    if (!calMode) {
+        checkErrorConvergence();
+        
+        if (errorDivergenceFault) {
+            global_fault = true;
+            errorText += "MOTOR ERROR DIVERGENCE DETECTED. Errors are increasing instead of decreasing.\n";
+            hasNewErrors = true;
+        }
+    }
+
     // Emergency stop on fault (except in calibration mode)
     if (global_fault && !calMode) {
         setPWM(_pwm_pin_el, 255);
@@ -226,6 +243,186 @@ void MotorSensorController::runSafetyLoop() {
         hasNewErrors = true;
         slowPrint(errorText, 0);
     }
+}
+
+// =============================================================================
+// ERROR CONVERGENCE SAFETY METHODS
+// =============================================================================
+
+void MotorSensorController::updateErrorTracking() {
+    unsigned long currentTime = millis();
+    
+    // Update azimuth error tracking
+    if (currentTime - _azErrorTracker.lastSampleTime >= ERROR_SAMPLE_INTERVAL) {
+        _azErrorTracker.errorHistory[_azErrorTracker.currentIndex] = abs(getErrorAz());
+        _azErrorTracker.timestamps[_azErrorTracker.currentIndex] = currentTime;
+        _azErrorTracker.currentIndex = (_azErrorTracker.currentIndex + 1) % ERROR_HISTORY_SIZE;
+        _azErrorTracker.sampleCount = min(_azErrorTracker.sampleCount + 1, ERROR_HISTORY_SIZE);
+        _azErrorTracker.lastSampleTime = currentTime;
+        _azErrorTracker.motorShouldBeActive = (setPointState_az && !_isAzMotorLatched && !global_fault);
+    }
+    
+    // Update elevation error tracking
+    if (currentTime - _elErrorTracker.lastSampleTime >= ERROR_SAMPLE_INTERVAL) {
+        _elErrorTracker.errorHistory[_elErrorTracker.currentIndex] = abs(getErrorEl());
+        _elErrorTracker.timestamps[_elErrorTracker.currentIndex] = currentTime;
+        _elErrorTracker.currentIndex = (_elErrorTracker.currentIndex + 1) % ERROR_HISTORY_SIZE;
+        _elErrorTracker.sampleCount = min(_elErrorTracker.sampleCount + 1, ERROR_HISTORY_SIZE);
+        _elErrorTracker.lastSampleTime = currentTime;
+        _elErrorTracker.motorShouldBeActive = (setPointState_el && !_isElMotorLatched && !global_fault);
+    }
+}
+
+void MotorSensorController::checkStall() {
+    unsigned long currentTime = millis();
+    _jitterAzMotors = false;
+    _jitterElMotors = false;
+
+    // Check azimuth convergence
+    if (_azErrorTracker.sampleCount >= ERROR_HISTORY_SIZE / 2 && 
+        _azErrorTracker.motorShouldBeActive &&
+        (currentTime - _azErrorTracker.setpointChangeTime) > CONVERGENCE_TIMEOUT) {
+
+        // Attempt to jitter the motor out of stall protection
+        if (isConvergenceStalled(_azErrorTracker, _MIN_AZ_TOLERANCE)) {
+            _jitterAzMotors = true;
+        }
+    }
+
+    if (_elErrorTracker.sampleCount >= ERROR_HISTORY_SIZE / 2 && 
+        _elErrorTracker.motorShouldBeActive &&
+        (currentTime - _elErrorTracker.setpointChangeTime) > CONVERGENCE_TIMEOUT) {
+        
+        if (isConvergenceStalled(_elErrorTracker, _MIN_EL_TOLERANCE)) {
+            _jitterElMotors = true;
+        }
+    }
+}
+
+void MotorSensorController::checkErrorConvergence() {
+    // Only check convergence if we have enough data and sufficient time has passed since setpoint changes
+    unsigned long currentTime = millis();
+    
+    // Check azimuth convergence
+    if (_azErrorTracker.sampleCount >= ERROR_HISTORY_SIZE / 2 && 
+        _azErrorTracker.motorShouldBeActive &&
+        (currentTime - _azErrorTracker.setpointChangeTime) > CONVERGENCE_TIMEOUT) {
+        
+        if (isErrorDiverging(_azErrorTracker, _MIN_AZ_TOLERANCE)) {
+            if (!errorDivergenceFault) {
+                _logger.error("AZ Error divergence detected");
+                errorDivergenceFault = true;
+            }
+        }
+    }
+    
+    // Check elevation convergence
+    if (_elErrorTracker.sampleCount >= ERROR_HISTORY_SIZE / 2 && 
+        _elErrorTracker.motorShouldBeActive &&
+        (currentTime - _elErrorTracker.setpointChangeTime) > CONVERGENCE_TIMEOUT) {
+        
+        if (isErrorDiverging(_elErrorTracker, _MIN_EL_TOLERANCE)) {
+            if (!errorDivergenceFault) {
+                _logger.error("EL Error divergence detected");
+                errorDivergenceFault = true;
+            }
+        }
+    }
+}
+
+bool MotorSensorController::isErrorDiverging(const ErrorTracker& tracker, float tolerance) {
+    if (tracker.sampleCount < ERROR_HISTORY_SIZE / 2) return false;
+    
+    // Get recent error values
+    int recentSamples = min(tracker.sampleCount, ERROR_HISTORY_SIZE / 3);
+    float recentSum = 0;
+    float oldSum = 0;
+    int oldSamples = 0;
+    
+    // Calculate average of recent samples
+    for (int i = 0; i < recentSamples; i++) {
+        int idx = (tracker.currentIndex - 1 - i + ERROR_HISTORY_SIZE) % ERROR_HISTORY_SIZE;
+        recentSum += tracker.errorHistory[idx];
+    }
+    float recentAvg = recentSum / recentSamples;
+    
+    // Calculate average of older samples
+    for (int i = recentSamples; i < tracker.sampleCount; i++) {
+        int idx = (tracker.currentIndex - 1 - i + ERROR_HISTORY_SIZE) % ERROR_HISTORY_SIZE;
+        oldSum += tracker.errorHistory[idx];
+        oldSamples++;
+    }
+    
+    if (oldSamples == 0) return false;
+    float oldAvg = oldSum / oldSamples;
+    
+    // Check if error is diverging (recent average is significantly larger than old average)
+    bool isDiverging = (recentAvg > oldAvg * DIVERGENCE_THRESHOLD) && (recentAvg > tolerance * 2);
+    
+    if (isDiverging) {
+        _logger.debug("Divergence detected - Recent avg: " + String(recentAvg, 3) + 
+                     ", Old avg: " + String(oldAvg, 3) + ", Tolerance: " + String(tolerance, 3));
+    }
+    
+    return isDiverging;
+}
+
+bool MotorSensorController::isConvergenceStalled(const ErrorTracker& tracker, float tolerance) {
+    if (tracker.sampleCount < ERROR_HISTORY_SIZE / 2) return false;
+    
+    // Calculate the rate of change in error
+    float changeRate = calculateErrorChangeRate(tracker);
+    
+    // Get current error
+    int currentIdx = (tracker.currentIndex - 1 + ERROR_HISTORY_SIZE) % ERROR_HISTORY_SIZE;
+    float currentError = tracker.errorHistory[currentIdx];
+    
+    // Check if convergence is stalled:
+    // 1. Current error is above tolerance (motor should be active)
+    // 2. Rate of change is too small (not making progress)
+    bool isStalled = (currentError > tolerance * 1.5) && (abs(changeRate) < STALL_THRESHOLD);
+    
+    if (isStalled) {
+        _logger.debug("Stall detected - Current error: " + String(currentError, 3) + 
+                     ", Change rate: " + String(changeRate, 4) + " deg/s, Tolerance: " + String(tolerance, 3));
+    }
+    
+    return isStalled;
+}
+
+float MotorSensorController::calculateErrorChangeRate(const ErrorTracker& tracker) {
+    if (tracker.sampleCount < 3) return 0;
+    
+    // Use linear regression to calculate the slope (rate of change)
+    int samples = min(tracker.sampleCount, ERROR_HISTORY_SIZE / 2);
+    float sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+    
+    for (int i = 0; i < samples; i++) {
+        int idx = (tracker.currentIndex - 1 - i + ERROR_HISTORY_SIZE) % ERROR_HISTORY_SIZE;
+        float x = i; // Time index (relative)
+        float y = tracker.errorHistory[idx];
+        
+        sumX += x;
+        sumY += y;
+        sumXY += x * y;
+        sumX2 += x * x;
+    }
+    
+    // Calculate slope using least squares method
+    float slope = (samples * sumXY - sumX * sumY) / (samples * sumX2 - sumX * sumX);
+    
+    // Convert to degrees per second (slope is in degrees per sample, multiply by sample rate)
+    return slope * (1000.0 / ERROR_SAMPLE_INTERVAL);
+}
+
+void MotorSensorController::resetErrorTracker(ErrorTracker& tracker) {
+    tracker.currentIndex = 0;
+    tracker.sampleCount = 0;
+    tracker.lastSampleTime = 0;
+    tracker.setpointChangeTime = millis();
+    tracker.motorShouldBeActive = false;
+    memset(tracker.errorHistory, 0, sizeof(tracker.errorHistory));
+    memset(tracker.timestamps, 0, sizeof(tracker.timestamps));
 }
 
 // =============================================================================
@@ -258,11 +455,24 @@ void MotorSensorController::actuate_motor_az(int MIN_SPEED) {
             _current_speed_az = min(_current_speed_az + speedDecrement, targetSpeed);
         }
         setPWM(_pwm_pin_az, _current_speed_az);
+
+      if(_jitterAzMotors) {
+        _logger.info("Attempting recovery of stalled AZ motor with jitter");
+        setPWM(_pwm_pin_az, 0);
+        digitalWrite(_ccw_pin_az, (error >= 0) ? HIGH : LOW);  // Brief opposite direction
+        delayMicroseconds(150000);
+        digitalWrite(_ccw_pin_az, (error >= 0) ? LOW : HIGH);
+        delayMicroseconds(150000);
+        setPWM(_pwm_pin_az, _current_speed_az);
+      }
+
     } else {
         // Stop motor
         setPWM(_pwm_pin_az, 255);
         _current_speed_az = MIN_SPEED;
     }
+
+
 }
 
 void MotorSensorController::actuate_motor_el(int MIN_SPEED) {
@@ -291,6 +501,18 @@ void MotorSensorController::actuate_motor_el(int MIN_SPEED) {
             _current_speed_el = min(_current_speed_el + speedDecrement, targetSpeed);
         }
         setPWM(_pwm_pin_el, _current_speed_el);
+
+      if(_jitterElMotors) {
+        _logger.info("Attempting recovery of stalled EL motor with jitter");
+        setPWM(_pwm_pin_el, 0);
+        digitalWrite(_ccw_pin_el, (error >= 0) ? HIGH : LOW);  // Brief opposite direction
+        delayMicroseconds(150000);
+        digitalWrite(_ccw_pin_el, (error >= 0) ? LOW : HIGH);
+        delayMicroseconds(150000);
+        setPWM(_pwm_pin_el, _current_speed_el);
+      }
+
+
     } else {
         // Stop motor
         setPWM(_pwm_pin_el, 255);
@@ -307,11 +529,15 @@ void MotorSensorController::updateMotorControl(float currentSetPointAz, float cu
     if (setPointAzUpdated) {
         _isAzMotorLatched = false;
         _prev_error_az = 0;
+        resetErrorTracker(_azErrorTracker);
+        errorDivergenceFault = false;  // Clear convergence faults on new setpoint
     }
 
     if (setPointElUpdated) {
         _isElMotorLatched = false;
         _prev_error_el = 0;
+        resetErrorTracker(_elErrorTracker);
+        errorDivergenceFault = false;  // Clear convergence faults on new setpoint
     }
 
     // Detect overshoot (error sign flip)
@@ -752,7 +978,7 @@ void MotorSensorController::setMaxPowerBeforeFault(int value) {
 // =============================================================================
 
 void MotorSensorController::setPEl(int value) {
-    if (value > 0 && value <= 1000) {
+    if (value >= -1000 && value <= 1000) {
         P_el = value;
         _preferences.putInt("P_el", value);
         _logger.info("P_el set to: " + String(value));
@@ -760,7 +986,7 @@ void MotorSensorController::setPEl(int value) {
 }
 
 void MotorSensorController::setPAz(int value) {
-    if (value > 0 && value <= 1000) {
+    if (value >= -1000 && value <= 1000) {
         P_az = value;
         _preferences.putInt("P_az", value);
         _logger.info("P_az set to: " + String(value));

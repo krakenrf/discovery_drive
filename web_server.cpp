@@ -415,8 +415,8 @@ void WebServerManager::setupConfigurationRoutes() {
             }
         };
 
-        setIntParam("P_el", [this](int v) { msc.setPEl(v); }, 1, 1000);
-        setIntParam("P_az", [this](int v) { msc.setPAz(v); }, 1, 1000);
+        setIntParam("P_el", [this](int v) { msc.setPEl(v); }, -1000, 1000);
+        setIntParam("P_az", [this](int v) { msc.setPAz(v); }, -1000, 1000);
         setIntParam("MIN_EL_SPEED", [this](int v) { msc.setMinElSpeed(v); }, 0, 255);
         setIntParam("MIN_AZ_SPEED", [this](int v) { msc.setMinAzSpeed(v); }, 0, 255);
         setIntParam("MAX_FAULT_POWER", [this](int v) { msc.setMaxPowerBeforeFault(v); }, 1, 25);
