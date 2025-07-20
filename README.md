@@ -5,3 +5,5 @@ Firmware for the Discovery Drive rotator
 For the ESP32-S3. (Select ESP32S3 Dev Modile in Arduno IDE)
 
 Enable USB-CDC On Boot, and USB Mode: USB-OTG (TinyUSB) to enable serial over USB
+
+Partition Scheme - Minimal SPIFFS 19.MB APP with OTA/190kB SPIFFS
