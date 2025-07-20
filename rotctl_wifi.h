@@ -19,7 +19,7 @@
 #ifndef ROTCTL_WIFI_H
 #define ROTCTL_WIFI_H
 
-#include <Arduino.h>
+//#include <Arduino.h>
 #include <Preferences.h>
 #include <WiFiServer.h>
 #include <WiFiClient.h>

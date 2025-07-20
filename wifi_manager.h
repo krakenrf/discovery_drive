@@ -24,7 +24,6 @@
 
 // Arduino/System includes
 #include <Arduino.h>
-#include <WiFi.h>
 #include <Preferences.h>
 #include <ESPmDNS.h>
 
@@ -33,7 +32,6 @@
 #include "esp_event.h"
 #include "esp_netif.h"
 #include "esp_wifi_types.h"
-#include <lwip/ip_addr.h>
 
 // Custom includes
 #include "logger.h"
