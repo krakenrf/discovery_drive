@@ -260,7 +260,7 @@ void PollWeather(void *pvParameters){
   {
     weatherPoller.runWeatherLoop(wifiManager.wifiConnected);
     xFrequency = weatherPoller.isPollingEnabled() ? 
-            pdMS_TO_TICKS(10000) : pdMS_TO_TICKS(60000); // 10s when active, 60s when disabled
+            pdMS_TO_TICKS(5000) : pdMS_TO_TICKS(60000); // 5s when active, 60s when disabled
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
     // ------------------------------------------------------------------------
   }

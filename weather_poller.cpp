@@ -44,6 +44,12 @@ void WeatherPoller::begin() {
     if (isFullyConfigured()) {
         configStatus += "Fully configured (Location: " + String(_latitude.load(), 6) + ", " + 
                        String(_longitude.load(), 6) + ", API key: SET)";
+        
+        // Force immediate update on first boot if fully configured
+        if (_pollingEnabled) {
+            _forceUpdate = true;
+            _logger.info("Weather system configured - will fetch data immediately");
+        }
     } else if (isLocationConfigured() && !isApiKeyConfigured()) {
         configStatus += "Location set but API key missing";
     } else if (!isLocationConfigured() && isApiKeyConfigured()) {
@@ -107,6 +113,12 @@ bool WeatherPoller::shouldPollWeather() {
     unsigned long currentTime = millis();
     unsigned long timeSinceLastPoll = currentTime - _lastPollTime;
     unsigned long timeSinceLastSuccess = currentTime - _lastSuccessTime;
+    
+    // First boot scenario - poll immediately if we've never successfully updated
+    if (_lastSuccessTime == 0 && timeSinceLastPoll > 5000) { // Wait 5 seconds after boot for system to settle
+        _logger.debug("First weather poll attempt after boot");
+        return true;
+    }
     
     // Regular interval polling
     if (timeSinceLastPoll >= POLL_INTERVAL_MS) {
@@ -189,8 +201,8 @@ bool WeatherPoller::processWeatherResponse(const String& payload) {
     if (currentOk || forecastOk) {
         if (_weatherDataMutex != NULL && xSemaphoreTake(_weatherDataMutex, portMAX_DELAY) == pdTRUE) {
             _weatherData.dataValid = true;
-            _weatherData.lastUpdateTime = formatTimestamp(millis() / 1000);
             _weatherData.errorMessage = "";
+            // lastUpdateTime is now set directly from WeatherAPI's last_updated field in extractCurrentWeather()
             xSemaphoreGive(_weatherDataMutex);
         }
         return true;
@@ -218,6 +230,9 @@ bool WeatherPoller::extractCurrentWeather(JsonDocument& doc) {
         _weatherData.currentWindDirection = validateWindDirection(current["wind_degree"]);
         _weatherData.currentWindGust = validateWindSpeed(current["gust_kph"]);
         _weatherData.currentTime = current["last_updated"].as<String>();
+        
+        // Use WeatherAPI's last_updated timestamp for our "Last Update" field too
+        _weatherData.lastUpdateTime = formatWeatherApiTime(current["last_updated"].as<String>());
         
         xSemaphoreGive(_weatherDataMutex);
         
@@ -284,6 +299,7 @@ bool WeatherPoller::extractForecastWeather(JsonDocument& doc) {
 void WeatherPoller::clearWeatherData() {
     if (_weatherDataMutex != NULL && xSemaphoreTake(_weatherDataMutex, portMAX_DELAY) == pdTRUE) {
         _weatherData = WeatherData(); // Reset to default values
+        _weatherData.lastUpdateTime = "Never"; // Set appropriate default
         xSemaphoreGive(_weatherDataMutex);
     }
 }
@@ -316,8 +332,8 @@ bool WeatherPoller::setLocation(float latitude, float longitude) {
     
     _logger.info("Weather location set to: " + String(latitude, 6) + ", " + String(longitude, 6));
     
-    // Clear old data and force update if API key is also set
-    if (isApiKeyConfigured()) {
+    // Clear old data and force update if now fully configured
+    if (isFullyConfigured() && _pollingEnabled) {
         clearWeatherData();
         forceUpdate();
     }
@@ -344,8 +360,8 @@ bool WeatherPoller::setApiKey(const String& apiKey) {
     
     _logger.info("WeatherAPI key configured");
     
-    // Clear old data and force update if location is also set
-    if (isLocationConfigured()) {
+    // Clear old data and force update if now fully configured
+    if (isFullyConfigured() && _pollingEnabled) {
         clearWeatherData();
         forceUpdate();
     }
@@ -491,9 +507,31 @@ float WeatherPoller::validateWindDirection(float direction) {
     return direction;
 }
 
-String WeatherPoller::formatTimestamp(unsigned long epochTime) {
-    // Simple timestamp formatting - could be enhanced with proper time conversion
-    return String(epochTime);
+String WeatherPoller::formatWeatherApiTime(const String& apiTime) {
+    // WeatherAPI returns time like "2024-01-15 14:30" (local time at location)
+    // We'll just clean it up for display
+    if (apiTime.length() == 0) {
+        return "Unknown";
+    }
+    
+    // Find the space between date and time
+    int spaceIndex = apiTime.indexOf(' ');
+    if (spaceIndex == -1) {
+        return apiTime; // Return as-is if format is unexpected
+    }
+    
+    String datePart = apiTime.substring(0, spaceIndex);
+    String timePart = apiTime.substring(spaceIndex + 1);
+    
+    // Return in format "Jan 15, 14:30" for better readability
+    // For now, just return time part since that's most relevant
+    return timePart + " (local)";
+}
+
+String WeatherPoller::getRelativeUpdateTime() {
+    // This method is kept for backward compatibility but uses weather data timestamp
+    WeatherData data = getWeatherData();
+    return data.lastUpdateTime;
 }
 
 bool WeatherPoller::isValidCoordinate(float lat, float lon) {

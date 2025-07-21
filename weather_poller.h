@@ -118,7 +118,8 @@ private:
     // Utility methods
     float validateWindSpeed(float speed);
     float validateWindDirection(float direction);
-    String formatTimestamp(unsigned long epochTime);
+    String formatWeatherApiTime(const String& apiTime);
+    String getRelativeUpdateTime();
     bool isValidCoordinate(float lat, float lon);
     bool isValidApiKey(const String& key);
 };
