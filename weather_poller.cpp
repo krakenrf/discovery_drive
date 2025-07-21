@@ -728,7 +728,7 @@ String WeatherPoller::buildApiUrl() {
     String url = "http://api.weatherapi.com/v1/forecast.json";
     url += "?key=" + apiKey;
     url += "&q=" + String(_latitude.load(), 6) + "," + String(_longitude.load(), 6);
-    url += "&days=1";
+    url += "&days=2";
     url += "&aqi=no";
     url += "&alerts=no";
     
