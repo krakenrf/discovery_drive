@@ -203,6 +203,9 @@ setInterval(function() {
       // Redraw the skyplane and update the position of the circle
       drawSkyplane();
       drawPositions(azimuth, elevation, setpoint_az, setpoint_el);
+      
+      // Draw wind direction triangle (pass raw wind direction value)
+      drawWindDirection(data.currentWindDirection, data.weatherDataValid === "YES");
     }
   };
   xhr.send();
@@ -447,6 +450,47 @@ function drawPositions(azimuth, elevation, setpoint_az, setpoint_el) {
       ctx.stroke();
     }
   });
+}
+
+// Function to draw wind direction triangle
+function drawWindDirection(windDirection, weatherDataValid) {
+  // Don't draw if no valid wind data
+  if (!weatherDataValid || !windDirection || windDirection === "N/A" || isNaN(windDirection)) {
+    return;
+  }
+  
+  const windDir = parseFloat(windDirection);
+  const windRad = (windDir - 90) * (Math.PI / 180); // Convert to radians and adjust for canvas coordinates
+  const triangleRadius = radius * 1.08; // Place triangle just outside the outer radius
+  const triangleSize = 8;
+  
+  // Calculate triangle center point (positioned on wind direction)
+  const centerTriangleX = centerX + triangleRadius * Math.cos(windRad);
+  const centerTriangleY = centerY + triangleRadius * Math.sin(windRad);
+  
+  // Create triangle points (pointing towards center, showing where wind comes from)
+  const point1X = centerTriangleX + triangleSize * Math.cos(windRad);
+  const point1Y = centerTriangleY + triangleSize * Math.sin(windRad);
+  
+  const point2X = centerTriangleX - triangleSize * 0.5 * Math.cos(windRad) + triangleSize * 0.866 * Math.cos(windRad + Math.PI/2);
+  const point2Y = centerTriangleY - triangleSize * 0.5 * Math.sin(windRad) + triangleSize * 0.866 * Math.sin(windRad + Math.PI/2);
+  
+  const point3X = centerTriangleX - triangleSize * 0.5 * Math.cos(windRad) - triangleSize * 0.866 * Math.cos(windRad + Math.PI/2);
+  const point3Y = centerTriangleY - triangleSize * 0.5 * Math.sin(windRad) - triangleSize * 0.866 * Math.sin(windRad + Math.PI/2);
+  
+  // Draw filled triangle
+  ctx.beginPath();
+  ctx.moveTo(point1X, point1Y);
+  ctx.lineTo(point2X, point2Y);
+  ctx.lineTo(point3X, point3Y);
+  ctx.closePath();
+  ctx.fillStyle = '#FF6B35'; // Orange-red color for visibility
+  ctx.fill();
+  
+  // Add subtle border to triangle
+  ctx.strokeStyle = '#E55A2B'; // Slightly darker orange for border
+  ctx.lineWidth = 1;
+  ctx.stroke();
 }
 
 // Initial draw
