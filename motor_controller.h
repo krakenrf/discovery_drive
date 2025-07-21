@@ -58,6 +58,8 @@ public:
     void setElStartAngle(float value);
     int getMaxPowerBeforeFault();
     void setMaxPowerBeforeFault(int value);
+    int getMinVoltageThreshold();
+    void setMinVoltageThreshold(int value);
 
     // Configuration parameter getters
     int getPEl() const { return P_el; }
@@ -157,6 +159,7 @@ private:
     float _MIN_AZ_TOLERANCE = 1.5;
     float _MIN_EL_TOLERANCE = 0.1;
     std::atomic<int> _maxPowerBeforeFault = 10;
+    std::atomic<int> _minVoltageThreshold = 6;
 
     // Setpoints and errors (thread-safe)
     volatile float _setpoint_az = 0;

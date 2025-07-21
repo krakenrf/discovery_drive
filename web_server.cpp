@@ -23,10 +23,10 @@
 // =============================================================================
 
 WebServerManager::WebServerManager(Preferences& prefs, MotorSensorController& motorController, INA219Manager& ina219Manager, 
-                                   StellariumPoller& stellariumPoller, SerialManager& serialManager, WiFiManager& wifiManager, 
-                                   RotctlWifi& rotctlWifi, Logger& logger)
+                StellariumPoller& stellariumPoller, WeatherPoller& weatherPoller, SerialManager& serialManager, 
+                WiFiManager& wifiManager, RotctlWifi& rotctlWifi, Logger& logger)
     : preferences(prefs), msc(motorController), ina219Manager(ina219Manager), stellariumPoller(stellariumPoller),
-      serialManager(serialManager), wifiManager(wifiManager), rotctlWifi(rotctlWifi), _logger(logger) {
+      weatherPoller(weatherPoller), serialManager(serialManager), wifiManager(wifiManager), rotctlWifi(rotctlWifi), _logger(logger) {
     
     _fileMutex = xSemaphoreCreateMutex();
     _loginUserMutex = xSemaphoreCreateMutex();
@@ -420,6 +420,7 @@ void WebServerManager::setupConfigurationRoutes() {
         setIntParam("MIN_EL_SPEED", [this](int v) { msc.setMinElSpeed(v); }, 0, 255);
         setIntParam("MIN_AZ_SPEED", [this](int v) { msc.setMinAzSpeed(v); }, 0, 255);
         setIntParam("MAX_FAULT_POWER", [this](int v) { msc.setMaxPowerBeforeFault(v); }, 1, 25);
+        setIntParam("MIN_VOLTAGE_THRESHOLD", [this](int v) { msc.setMinVoltageThreshold(v); }, 1, 20);
         
         setFloatParam("MIN_AZ_TOLERANCE", [this](float v) { msc.setMinAzTolerance(v); }, 0.1f, 10.0f);
         setFloatParam("MIN_EL_TOLERANCE", [this](float v) { msc.setMinElTolerance(v); }, 0.1f, 10.0f);
@@ -430,6 +431,88 @@ void WebServerManager::setupConfigurationRoutes() {
         
         server->send(204);
     });
+
+    // Weather configuration routes
+
+    server->on("/setWeatherApiKey", HTTP_POST, [this]() {
+        if (server->hasArg("weatherApiKey")) {
+            String apiKey = server->arg("weatherApiKey");
+            apiKey.trim();
+            
+            if (apiKey.length() == 0) {
+                // Allow clearing the API key
+                weatherPoller.setApiKey("");
+                _logger.info("Weather API key cleared via web interface");
+                server->send(200, "text/plain", "API key cleared");
+            } else if (weatherPoller.setApiKey(apiKey)) {
+                _logger.info("Weather API key updated via web interface");
+                server->send(204);
+            } else {
+                server->send(400, "text/plain", "Invalid API key format");
+            }
+        } else {
+            server->send(400, "text/plain", "Missing API key parameter");
+        }
+    });
+
+
+    server->on("/setWeatherLocation", HTTP_POST, [this]() {
+        bool updated = false;
+        
+        if (server->hasArg("latitude") && server->hasArg("longitude")) {
+            String latStr = server->arg("latitude");
+            String lonStr = server->arg("longitude");
+            
+            latStr.trim();
+            lonStr.trim();
+            
+            if (latStr.length() > 0 && lonStr.length() > 0) {
+                float lat = latStr.toFloat();
+                float lon = lonStr.toFloat();
+                
+                _logger.debug("Received weather location: " + String(lat, 6) + ", " + String(lon, 6));
+                
+                if (weatherPoller.setLocation(lat, lon)) {
+                    updated = true;
+                    _logger.info("Weather location updated via web interface: " + 
+                                String(lat, 6) + ", " + String(lon, 6));
+                } else {
+                    _logger.error("Invalid coordinates received: " + String(lat, 6) + ", " + String(lon, 6));
+                    server->send(400, "text/plain", "Invalid coordinates");
+                    return;
+                }
+            }
+        } else {
+            _logger.error("Missing latitude or longitude parameters");
+        }
+        
+        if (updated) {
+            server->send(204);
+        } else {
+            server->send(400, "text/plain", "Missing or invalid coordinates");
+        }
+    });
+
+    server->on("/weatherOn", HTTP_GET, [this]() {
+        weatherPoller.setPollingEnabled(true);
+        server->send(200, "text/plain", "Weather polling ON");
+    });
+
+    server->on("/weatherOff", HTTP_GET, [this]() {
+        weatherPoller.setPollingEnabled(false);
+        server->send(200, "text/plain", "Weather polling OFF");
+    });
+
+    server->on("/forceWeatherUpdate", HTTP_GET, [this]() {
+        if (weatherPoller.isLocationConfigured()) {
+            weatherPoller.forceUpdate();
+            server->send(200, "text/plain", "Weather update forced");
+        } else {
+            server->send(400, "text/plain", "Location not configured");
+        }
+    });
+
+
 }
 
 void WebServerManager::setupAPIRoutes() {
@@ -506,6 +589,7 @@ void WebServerManager::setupAPIRoutes() {
         doc["MIN_AZ_TOLERANCE"] = String(msc.getMinAzTolerance());
         doc["MIN_EL_TOLERANCE"] = String(msc.getMinElTolerance());
         doc["MAX_FAULT_POWER"] = String(msc.getMaxPowerBeforeFault());
+        doc["MIN_VOLTAGE_THRESHOLD"] = String(msc.getMinVoltageThreshold());
 
         // Power and connectivity data
         doc["inputVoltage"] = String(ina219Manager.getLoadVoltage());
@@ -524,6 +608,49 @@ void WebServerManager::setupAPIRoutes() {
         doc["newLogMessages"] = _logger.getNewLogMessages();
         doc["currentDebugLevel"] = _logger.getDebugLevel();
         doc["serialOutputDisabled"] = _logger.getSerialOutputDisabled();
+
+        // Weather data
+        WeatherData weatherData = weatherPoller.getWeatherData();
+        doc["weatherEnabled"] = String(weatherPoller.isPollingEnabled() ? "ON" : "OFF");
+        doc["weatherApiKeyConfigured"] = String(weatherPoller.isApiKeyConfigured() ? "YES" : "NO");
+        doc["weatherLocationConfigured"] = String(weatherPoller.isLocationConfigured() ? "YES" : "NO");
+        doc["weatherLatitude"] = String(weatherPoller.getLatitude(), 6);
+        doc["weatherLongitude"] = String(weatherPoller.getLongitude(), 6);
+        
+        if (weatherData.dataValid) {
+            // Current weather
+            doc["weatherDataValid"] = "YES";
+            doc["currentWindSpeed"] = String(weatherData.currentWindSpeed, 1);
+            doc["currentWindDirection"] = String(weatherData.currentWindDirection, 0);
+            doc["currentWindGust"] = String(weatherData.currentWindGust, 1);
+            doc["currentWeatherTime"] = weatherData.currentTime;
+            
+            // Forecast data (next 3 hours)
+            JsonArray forecastWindSpeed = doc.createNestedArray("forecastWindSpeed");
+            JsonArray forecastWindDirection = doc.createNestedArray("forecastWindDirection");
+            JsonArray forecastWindGust = doc.createNestedArray("forecastWindGust");
+            JsonArray forecastTimes = doc.createNestedArray("forecastTimes");
+            
+            for (int i = 0; i < 3; i++) {
+                forecastWindSpeed.add(String(weatherData.forecastWindSpeed[i], 1));
+                forecastWindDirection.add(String(weatherData.forecastWindDirection[i], 0));
+                forecastWindGust.add(String(weatherData.forecastWindGust[i], 1));
+                forecastTimes.add(weatherData.forecastTimes[i]);
+            }
+            
+            doc["weatherLastUpdate"] = weatherData.lastUpdateTime;
+            doc["weatherError"] = "";
+        } else {
+            doc["weatherDataValid"] = "NO";
+            doc["currentWindSpeed"] = "N/A";
+            doc["currentWindDirection"] = "N/A";
+            doc["currentWindGust"] = "N/A";
+            doc["currentWeatherTime"] = "N/A";
+            doc["weatherLastUpdate"] = "Never";
+            doc["weatherError"] = weatherPoller.getLastError();
+        }
+
+
 
         String json;
         serializeJson(doc, json);

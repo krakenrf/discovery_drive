@@ -42,6 +42,7 @@ void MotorSensorController::begin() {
     _MIN_AZ_TOLERANCE = _preferences.getFloat("MIN_AZ_TOL", 1.5);
     _MIN_EL_TOLERANCE = _preferences.getFloat("MIN_EL_TOL", 0.1);
     _maxPowerBeforeFault = _preferences.getInt("MAX_POWER", 10);
+    _minVoltageThreshold = _preferences.getInt("MIN_VOLTAGE", 6);
 
     // Configure motor control pins
     pinMode(_pwm_pin_az, OUTPUT);
@@ -135,7 +136,7 @@ void MotorSensorController::runControlLoop() {
     // Update error tracking for convergence safety
     if (!calMode) {
         updateErrorTracking();
-        checkStall();
+        //checkStall(); // TEMP DISABLE
     }
 
     // Execute control logic
@@ -216,7 +217,7 @@ void MotorSensorController::runSafetyLoop() {
 
     // Check voltage level
     float loadVoltageValue = ina219Manager.getLoadVoltage();
-    if (loadVoltageValue < 9) lowVoltageFault = true;
+    if (loadVoltageValue < getMinVoltageThreshold()) lowVoltageFault = true;
 
     if (lowVoltageFault) {
         global_fault = true;
@@ -959,6 +960,19 @@ void MotorSensorController::setElStartAngle(float value) {
         _preferences.putFloat("el_cal", value);
         _el_startAngle = value;
         xSemaphoreGive(_el_startAngleMutex);
+    }
+}
+
+int MotorSensorController::getMinVoltageThreshold() {
+    return _minVoltageThreshold;
+}
+
+// Add new setter method:
+void MotorSensorController::setMinVoltageThreshold(int value) {
+    if (value > 0 && value < 20) {
+        _minVoltageThreshold = value;
+        _preferences.putInt("MIN_VOLTAGE", value);
+        _logger.info("MIN_VOLTAGE_THRESHOLD set to: " + String(value) + "V");
     }
 }
 

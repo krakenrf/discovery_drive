@@ -24,6 +24,14 @@
 
 INA219Manager::INA219Manager(Logger& logger)
     : _logger(logger), _ina219(_INA219_I2C_ADDRESS) {
+    
+    // Initialize voltage averaging array
+    for (int i = 0; i < _VOLTAGE_ARRAY_SIZE; i++) {
+        _voltageReadings[i] = 0.0;
+    }
+    _voltageIndex = 0;
+    _voltageCount = 0;
+    _averagedVoltage = 0.0;
 }
 
 void INA219Manager::begin() {
@@ -52,13 +60,54 @@ void INA219Manager::ReadData() {
         float shuntvoltage = _ina219.getShuntVoltage_mV();
         float busvoltage = _ina219.getBusVoltage_V();
         
-        // Calculate derived values
-        _current_mA = shuntvoltage / 0.01;  // Convert to mA
-        _loadvoltage = busvoltage + (shuntvoltage / 1000);  // Load voltage in V
-        _power = _loadvoltage * (_current_mA / 1000);  // Power in W
+        // Calculate raw load voltage
+        float rawLoadVoltage = busvoltage + (shuntvoltage / 1000);
+        
+        // Update voltage averaging
+        updateVoltageAverage(rawLoadVoltage);
+        
+        // Calculate derived values using averaged voltage
+        _current_mA = shuntvoltage / 0.01;  // Convert to mA (current calculation doesn't need averaging)
+        _loadvoltage = _averagedVoltage;    // Use averaged voltage
+        _power = _loadvoltage * (_current_mA / 1000);  // Power in W using averaged voltage
         
         xSemaphoreGive(powerMutex);
     }
+}
+
+// =============================================================================
+// VOLTAGE AVERAGING METHODS
+// =============================================================================
+
+void INA219Manager::updateVoltageAverage(float newVoltage) {
+    // Store the new voltage reading in the circular buffer
+    _voltageReadings[_voltageIndex] = newVoltage;
+    
+    // Move to next position in circular buffer
+    _voltageIndex = (_voltageIndex + 1) % _VOLTAGE_ARRAY_SIZE;
+    
+    // Track how many readings we have (up to array size)
+    if (_voltageCount < _VOLTAGE_ARRAY_SIZE) {
+        _voltageCount++;
+    }
+    
+    // Calculate the new average
+    _averagedVoltage = calculateVoltageAverage();
+}
+
+float INA219Manager::calculateVoltageAverage() {
+    if (_voltageCount == 0) {
+        return 0.0;
+    }
+    
+    float sum = 0.0;
+    
+    // Sum only the number of readings we actually have
+    for (int i = 0; i < _voltageCount; i++) {
+        sum += _voltageReadings[i];
+    }
+    
+    return sum / _voltageCount;
 }
 
 // =============================================================================
@@ -77,7 +126,7 @@ float INA219Manager::getCurrent() {
 float INA219Manager::getLoadVoltage() {
     float result = 0;
     if (xSemaphoreTake(powerMutex, portMAX_DELAY) == pdTRUE) {
-        result = _loadvoltage;
+        result = _loadvoltage;  // This is now the averaged voltage
         xSemaphoreGive(powerMutex);
     }
     return result;
@@ -86,7 +135,7 @@ float INA219Manager::getLoadVoltage() {
 float INA219Manager::getPower() {
     float result = 0;
     if (xSemaphoreTake(powerMutex, portMAX_DELAY) == pdTRUE) {
-        result = _power;
+        result = _power;  // This is calculated using averaged voltage
         xSemaphoreGive(powerMutex);
     }
     return result;

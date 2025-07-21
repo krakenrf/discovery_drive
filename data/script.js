@@ -119,11 +119,55 @@ setInterval(function() {
       document.getElementById("MIN_AZ_TOLERANCE").innerHTML = data.MIN_AZ_TOLERANCE;
       document.getElementById("MIN_EL_TOLERANCE").innerHTML = data.MIN_EL_TOLERANCE;
       document.getElementById("MAX_FAULT_POWER").innerHTML = data.MAX_FAULT_POWER;
+      document.getElementById("MIN_VOLTAGE_THRESHOLD").innerHTML = data.MIN_VOLTAGE_THRESHOLD;
 
       var azimuth = data.correctedAngle_az; // Replace with actual AZ data from Arduino
       var elevation = data.correctedAngle_el; // Replace with actual EL data from Arduino
       var setpoint_az = data.setpoint_az; // Replace with actual Setpoint AZ
       var setpoint_el = data.setpoint_el; // Replace with actual Setpoint EL
+      
+      
+      // Weather data updates
+      document.getElementById("weatherEnabled").innerHTML = data.weatherEnabled;
+      document.getElementById("weatherApiKeyConfigured").innerHTML = data.weatherApiKeyConfigured;
+      document.getElementById("weatherLocationConfigured").innerHTML = data.weatherLocationConfigured;
+      document.getElementById("weatherLatitude").innerHTML = data.weatherLatitude;
+      document.getElementById("weatherLongitude").innerHTML = data.weatherLongitude;
+      document.getElementById("weatherDataValid").innerHTML = data.weatherDataValid;
+      document.getElementById("weatherLastUpdate").innerHTML = data.weatherLastUpdate;
+      
+      // Update weather polling checkbox
+      var weatherCheckbox = document.getElementById("weatherPolling");
+      if (weatherCheckbox) {
+        weatherCheckbox.checked = (data.weatherEnabled === "ON");
+      }
+      
+      // Current weather conditions
+      document.getElementById("currentWindSpeed").innerHTML = data.currentWindSpeed;
+      document.getElementById("currentWindDirection").innerHTML = formatWindDirection(data.currentWindDirection);
+      document.getElementById("currentWindGust").innerHTML = data.currentWindGust;
+      document.getElementById("currentWeatherTime").innerHTML = formatWeatherTime(data.currentWeatherTime);
+      
+      // Forecast data
+      if (data.forecastWindSpeed && data.forecastWindSpeed.length >= 3) {
+        for (var i = 0; i < 3; i++) {
+          document.getElementById("forecastTime" + i).innerHTML = formatWeatherTime(data.forecastTimes[i]);
+          document.getElementById("forecastWindSpeed" + i).innerHTML = data.forecastWindSpeed[i];
+          document.getElementById("forecastWindDirection" + i).innerHTML = formatWindDirection(data.forecastWindDirection[i]);
+          document.getElementById("forecastWindGust" + i).innerHTML = data.forecastWindGust[i];
+        }
+      }
+      
+      // Weather error handling
+      var weatherErrorDiv = document.getElementById("weatherErrorDiv");
+      var weatherError = document.getElementById("weatherError");
+      if (data.weatherError && data.weatherError !== "") {
+        weatherError.innerHTML = "Error: " + data.weatherError;
+        weatherErrorDiv.style.display = "block";
+      } else {
+        weatherErrorDiv.style.display = "none";
+      }     
+      
 
       // Redraw the skyplane and update the position of the circle
       drawSkyplane();
@@ -519,4 +563,125 @@ function toggleAdvancedParams() {
   } else {
     section.style.display = "none";
   }
+}
+
+// Weather control functions
+function toggleWeatherPolling() {
+  var switchState = document.getElementById("weatherPolling").checked;
+  var xhr = new XMLHttpRequest();
+  if (switchState) {
+    xhr.open("GET", "/weatherOn", true);
+  } else {
+    xhr.open("GET", "/weatherOff", true);
+  }
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState == 4) {
+      if (xhr.status == 200) {
+        console.log("Weather polling setting updated: " + xhr.responseText);
+      } else {
+        console.error("Failed to update weather polling setting");
+      }
+    }
+  };
+  xhr.send();
+}
+
+function forceWeatherUpdate() {
+  var xhr = new XMLHttpRequest();
+  xhr.open("GET", "/forceWeatherUpdate", true);
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState == 4) {
+      if (xhr.status == 200) {
+        alert("Weather update requested. Data will refresh shortly.");
+      } else {
+        var errorMsg = "Failed to force weather update";
+        if (xhr.responseText) {
+          errorMsg += ": " + xhr.responseText;
+        }
+        if (xhr.responseText.includes("Location not configured")) {
+          errorMsg += "\nPlease set your location first.";
+        } else if (xhr.responseText.includes("API key not configured")) {
+          errorMsg += "\nPlease set your WeatherAPI.com API key first.";
+        }
+        alert(errorMsg);
+      }
+    }
+  };
+  xhr.send();
+}
+
+
+function getMyLocation() {
+  if (navigator.geolocation) {
+    navigator.geolocation.getCurrentPosition(
+      function(position) {
+        var lat = position.coords.latitude;
+        var lon = position.coords.longitude;
+        
+        document.getElementById('latitude').value = lat.toFixed(6);
+        document.getElementById('longitude').value = lon.toFixed(6);
+        
+        alert("Location detected: " + lat.toFixed(6) + ", " + lon.toFixed(6) + 
+              "\nClick 'Set Location' to save these coordinates.");
+      },
+      function(error) {
+        var errorMsg = "";
+        switch(error.code) {
+          case error.PERMISSION_DENIED:
+            errorMsg = "Location access denied by user.";
+            break;
+          case error.POSITION_UNAVAILABLE:
+            errorMsg = "Location information is unavailable.";
+            break;
+          case error.TIMEOUT:
+            errorMsg = "Location request timed out.";
+            break;
+          default:
+            errorMsg = "An unknown error occurred.";
+            break;
+        }
+        alert("Error getting location: " + errorMsg);
+      },
+      {
+        enableHighAccuracy: true,
+        timeout: 10000,
+        maximumAge: 300000 // 5 minutes
+      }
+    );
+  } else {
+    alert("Geolocation is not supported by this browser.");
+  }
+}
+
+function formatWeatherTime(timeStr) {
+  if (!timeStr || timeStr === "N/A" || timeStr === "") {
+    return "N/A";
+  }
+  
+  try {
+    // Parse ISO 8601 datetime string and format for display
+    var date = new Date(timeStr);
+    if (isNaN(date.getTime())) {
+      return timeStr; // Return original if can't parse
+    }
+    
+    // Format as HH:MM UTC
+    var hours = date.getUTCHours().toString().padStart(2, '0');
+    var minutes = date.getUTCMinutes().toString().padStart(2, '0');
+    return hours + ":" + minutes;
+  } catch (e) {
+    return timeStr; // Return original if any error
+  }
+}
+
+function formatWindDirection(degrees) {
+  if (!degrees || degrees === "N/A" || isNaN(degrees)) {
+    return "N/A";
+  }
+  
+  var dir = parseFloat(degrees);
+  var directions = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", 
+                   "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+  var index = Math.round(dir / 22.5) % 16;
+  return dir.toFixed(0) + "° (" + directions[index] + ")";
 }

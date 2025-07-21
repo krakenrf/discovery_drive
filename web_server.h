@@ -37,13 +37,14 @@
 #include "wifi_manager.h"
 #include "rotctl_wifi.h"
 #include "logger.h"
+#include "weather_poller.h"
 
 class WebServerManager {
 public:
     // Constructor
     WebServerManager(Preferences& prefs, MotorSensorController& motorController, INA219Manager& ina219Manager, 
-                    StellariumPoller& stellariumPoller, SerialManager& serialManager, WiFiManager& wifiManager, 
-                    RotctlWifi& rotctlWifi, Logger& logger);
+                StellariumPoller& stellariumPoller, WeatherPoller& weatherPoller, SerialManager& serialManager, 
+                WiFiManager& wifiManager, RotctlWifi& rotctlWifi, Logger& logger);
 
     // Core functionality
     void begin();
@@ -75,6 +76,7 @@ private:
     SerialManager& serialManager;
     RotctlWifi& rotctlWifi;
     Logger& _logger;
+    WeatherPoller& weatherPoller;
 
     // Authentication configuration
     bool _loginRequired = true;

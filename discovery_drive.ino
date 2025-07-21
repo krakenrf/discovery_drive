@@ -22,6 +22,7 @@
 #include "web_server.h"
 #include "ina219_manager.h"
 #include "stellarium_poller.h"
+#include "weather_poller.h"
 #include "serial_manager.h"
 #include "rotctl_wifi.h"
 #include "logger.h"
@@ -46,14 +47,16 @@ INA219Manager ina219Manager(logger);
 MotorSensorController motorSensorCtrl(preferences, ina219Manager, logger);
 SerialManager serialManager(preferences, motorSensorCtrl, logger);
 StellariumPoller stellariumPoller(preferences, motorSensorCtrl, logger);
+WeatherPoller weatherPoller(preferences, logger);
 RotctlWifi rotctlWifi(preferences, motorSensorCtrl, logger);
-WebServerManager webServerManager(preferences, motorSensorCtrl, ina219Manager, stellariumPoller, serialManager, wifiManager, rotctlWifi, logger);
+WebServerManager webServerManager(preferences, motorSensorCtrl, ina219Manager, stellariumPoller, weatherPoller, serialManager, wifiManager, rotctlWifi, logger);
 
 void SafetyMonitor ( void *pvParameters );
 void ReadPowerSensor( void *pvParameters );
 void HandleWebRequests( void *pvParameters );
 void ReadWiFi( void *pvParameters );
 void PollStellarium( void *pvParameters );
+void PollWeather( void *pvParameters );
 void ProcessSerial( void *pvParameters );
 void ControlMotors( void *pvParameters );
 
@@ -93,6 +96,8 @@ void setup() {
   motorSensorCtrl.begin();
   // Initialize INA219 current sensor
   ina219Manager.begin();
+  // Initialize weather poller
+  weatherPoller.begin();
 
   xTaskCreatePinnedToCore(
     HandleWebRequests
@@ -130,6 +135,15 @@ void setup() {
     ,  1  // Priority
     ,  NULL // Task handle is not used here - simply pass NULL
     ,  1); // Run on core 0 (since polling is not timing critical)
+
+  xTaskCreatePinnedToCore(
+    PollWeather
+    ,  "Poll Weather API" // A name just for humans
+    ,  4096        // The stack size can be checked by calling `uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);`
+    ,  NULL // Task parameter which can modify the task behavior. This must be passed as pointer to void.
+    ,  1  // Priority
+    ,  NULL // Task handle is not used here - simply pass NULL
+    ,  1); // Run on core 0 (network polling is not timing critical)
 
   xTaskCreatePinnedToCore(
     ProcessSerial
@@ -232,6 +246,21 @@ void PollStellarium(void *pvParameters){
     stellariumPoller.runStellariumLoop(serialManager.serialActive, rotctlWifi.getRotctlClientIP(), wifiManager.wifiConnected);
     xFrequency = stellariumPoller.getStellariumOn() ? 
             pdMS_TO_TICKS(250) : pdMS_TO_TICKS(1000);
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    // ------------------------------------------------------------------------
+  }
+}
+
+// Poll weather data for wind information
+void PollWeather(void *pvParameters){
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+  TickType_t xFrequency;
+
+  for(;;)
+  {
+    weatherPoller.runWeatherLoop(wifiManager.wifiConnected);
+    xFrequency = weatherPoller.isPollingEnabled() ? 
+            pdMS_TO_TICKS(10000) : pdMS_TO_TICKS(60000); // 10s when active, 60s when disabled
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
     // ------------------------------------------------------------------------
   }

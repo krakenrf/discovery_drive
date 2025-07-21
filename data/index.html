@@ -485,6 +485,157 @@
       <input type='submit' value='Submit'>
     </form>
   </div>
+  
+  
+  <div class="section-box">
+    <h2>Weather Information & Wind Monitoring</h2>
+    <p>Monitor current wind conditions and forecasts to optimize dish positioning and safety.</p>
+    <p><strong>Powered by WeatherAPI.com</strong> - Requires a free API key from <a href="https://www.weatherapi.com/" target="_blank">weatherapi.com</a></p>
+    
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+        <th>Default</th>
+      </tr>
+      <tr>
+        <td>Weather Polling</td>
+        <td><span id="weatherEnabled">Loading...</span></td>
+        <td>ON</td>
+      </tr>
+      <tr>
+        <td>API Key Configured</td>
+        <td><span id="weatherApiKeyConfigured">Loading...</span></td>
+        <td>NO</td>
+      </tr>
+      <tr>
+        <td>Location Configured</td>
+        <td><span id="weatherLocationConfigured">Loading...</span></td>
+        <td>NO</td>
+      </tr>
+      <tr>
+        <td>Latitude</td>
+        <td><span id="weatherLatitude">Loading...</span></td>
+        <td>Not Set</td>
+      </tr>
+      <tr>
+        <td>Longitude</td>
+        <td><span id="weatherLongitude">Loading...</span></td>
+        <td>Not Set</td>
+      </tr>
+      <tr>
+        <td>Data Valid</td>
+        <td><span id="weatherDataValid">Loading...</span></td>
+        <td>NO</td>
+      </tr>
+      <tr>
+        <td>Last Update</td>
+        <td><span id="weatherLastUpdate">Loading...</span></td>
+        <td>Never</td>
+      </tr>
+    </table>
+
+    <h3>Configuration</h3>
+    
+    <form action='/setWeatherApiKey' method='POST'>
+      <label for='weatherApiKey'>WeatherAPI.com API Key:</label>
+      <input type='text' id='weatherApiKey' name='weatherApiKey' placeholder='Enter your API key from weatherapi.com' maxlength='64'>
+      <input type='submit' value='Set API Key'>
+    </form>
+
+    <form action='/setWeatherLocation' method='POST'>
+      <label for='latitude'>Latitude (decimal degrees):</label>
+      <input type='number' id='latitude' name='latitude' step='0.000001' min='-90' max='90' placeholder='e.g. 40.7128'>
+      
+      <label for='longitude'>Longitude (decimal degrees):</label>
+      <input type='number' id='longitude' name='longitude' step='0.000001' min='-180' max='180' placeholder='e.g. -74.0060'>
+      
+      <input type='submit' value='Set Location'>
+    </form>
+
+    <button type="button" onclick="getMyLocation()">Use My Location</button>
+
+    <br/>
+
+    <label>Enable Weather Polling:</label>
+    <p>
+      <label class="switch">
+        <input type="checkbox" id="weatherPolling" onchange="toggleWeatherPolling()">
+        <span class="slider"></span>
+      </label>
+    </p>
+
+    <button type="button" onclick="forceWeatherUpdate()">Force Update</button>
+
+    <h3>Current Wind Conditions</h3>
+    <table>
+      <tr>
+        <th>Measurement</th>
+        <th>Value</th>
+        <th>Unit</th>
+      </tr>
+      <tr>
+        <td>Wind Speed</td>
+        <td><span id="currentWindSpeed">N/A</span></td>
+        <td>km/h</td>
+      </tr>
+      <tr>
+        <td>Wind Direction</td>
+        <td><span id="currentWindDirection">N/A</span></td>
+        <td>degrees</td>
+      </tr>
+      <tr>
+        <td>Wind Gusts</td>
+        <td><span id="currentWindGust">N/A</span></td>
+        <td>km/h</td>
+      </tr>
+      <tr>
+        <td>Observation Time</td>
+        <td><span id="currentWeatherTime">N/A</span></td>
+        <td>Local</td>
+      </tr>
+    </table>
+
+    <h3>Wind Forecast (Next 3 Hours)</h3>
+    <table>
+      <tr>
+        <th>Hour</th>
+        <th>Time</th>
+        <th>Wind Speed (km/h)</th>
+        <th>Direction (°)</th>
+        <th>Gusts (km/h)</th>
+      </tr>
+      <tr>
+        <td>+1</td>
+        <td><span id="forecastTime0">N/A</span></td>
+        <td><span id="forecastWindSpeed0">N/A</span></td>
+        <td><span id="forecastWindDirection0">N/A</span></td>
+        <td><span id="forecastWindGust0">N/A</span></td>
+      </tr>
+      <tr>
+        <td>+2</td>
+        <td><span id="forecastTime1">N/A</span></td>
+        <td><span id="forecastWindSpeed1">N/A</span></td>
+        <td><span id="forecastWindDirection1">N/A</span></td>
+        <td><span id="forecastWindGust1">N/A</span></td>
+      </tr>
+      <tr>
+        <td>+3</td>
+        <td><span id="forecastTime2">N/A</span></td>
+        <td><span id="forecastWindSpeed2">N/A</span></td>
+        <td><span id="forecastWindDirection2">N/A</span></td>
+        <td><span id="forecastWindGust2">N/A</span></td>
+      </tr>
+    </table>
+
+    <div id="weatherErrorDiv" style="color: red; font-weight: bold; margin: 10px 0; display: none;">
+      <span id="weatherError"></span>
+    </div>
+
+    <br/>
+    <p><strong>Note:</strong> Get your free API key from <a href="https://www.weatherapi.com/signup.aspx" target="_blank">WeatherAPI.com</a>. Free tier includes 1 million calls per month.</p>
+  </div>  
+  
 
   <div class="section-box">
     <h2>ESP32 Control Panel & Security</h2>
@@ -536,94 +687,103 @@
   </div>
 
   <div class="section-box">
-    <h2>Advanced Motor Parameters</h2>
-    <p><strong>WARNING:</strong> Only modify these parameters if you understand their impact on motor control behavior.</p>
+      <h2>Advanced Motor Parameters</h2>
+      <p><strong>WARNING:</strong> Only modify these parameters if you understand their impact on motor control behavior.</p>
 
-    <label>Show Advanced Parameters:</label>
-    <p>
-      <label class="switch">
-        <input type="checkbox" id="showAdvanced" onchange="toggleAdvancedParams()">
-        <span class="slider"></span>
-      </label>
-    </p>
+      <label>Show Advanced Parameters:</label>
+      <p>
+        <label class="switch">
+          <input type="checkbox" id="showAdvanced" onchange="toggleAdvancedParams()">
+          <span class="slider"></span>
+        </label>
+      </p>
 
-    <div id="advancedParamsSection" style="display: none;">
-      <table>
-        <tr>
-          <th>Parameter</th>
-          <th>Value</th>
-          <th>Range</th>
-          <th>Description</th>
-        </tr>
-        <tr>
-          <td>P_el (Elevation P-Gain)</td>
-          <td><span id="P_el">Loading...</span></td>
-          <td>-1000-1000</td>
-          <td>Proportional gain for elevation motor control. Default: 100</td>
-        </tr>
-        <tr>
-          <td>P_az (Azimuth P-Gain)</td>
-          <td><span id="P_az">Loading...</span></td>
-          <td>-1000-1000</td>
-          <td>Proportional gain for azimuth motor control. Default: 5</td>
-        </tr>
-        <tr>
-          <td>MIN_EL_SPEED</td>
-          <td><span id="MIN_EL_SPEED">Loading...</span></td>
-          <td>0-255</td>
-          <td>Minimum PWM speed for elevation motor. Lower is faster. Default: 50</td>
-        </tr>
-        <tr>
-          <td>MIN_AZ_SPEED</td>
-          <td><span id="MIN_AZ_SPEED">Loading...</span></td>
-          <td>0-255</td>
-          <td>Minimum PWM speed for azimuth motor. Lower is faster. Default: 100</td>
-        </tr>
-        <tr>
-          <td>MIN_AZ_TOLERANCE</td>
-          <td><span id="MIN_AZ_TOLERANCE">Loading...</span>°</td>
-          <td>0.1-10.0</td>
-          <td>Initial azimuth tolerance when moving. Default: 1.5°</td>
-        </tr>
-        <tr>
-          <td>MIN_EL_TOLERANCE</td>
-          <td><span id="MIN_EL_TOLERANCE">Loading...</span>°</td>
-          <td>0.1-10.0</td>
-          <td>Initial elevation tolerance when moving. Default: 0.1°</td>
-        </tr>
-        <tr>
-          <td>MAX_FAULT_POWER</td>
-          <td><span id="MAX_FAULT_POWER">Loading...</span>W</td>
-          <td>0-25</td>
-          <td>Max power draw before a fault is raised. Default: 10W</td>
-        </tr>
-      </table>
+      <div id="advancedParamsSection" style="display: none;">
+        <table>
+          <tr>
+            <th>Parameter</th>
+            <th>Value</th>
+            <th>Range</th>
+            <th>Description</th>
+          </tr>
+          <tr>
+            <td>P_el (Elevation P-Gain)</td>
+            <td><span id="P_el">Loading...</span></td>
+            <td>-1000-1000</td>
+            <td>Proportional gain for elevation motor control. Default: 100</td>
+          </tr>
+          <tr>
+            <td>P_az (Azimuth P-Gain)</td>
+            <td><span id="P_az">Loading...</span></td>
+            <td>-1000-1000</td>
+            <td>Proportional gain for azimuth motor control. Default: 5</td>
+          </tr>
+          <tr>
+            <td>MIN_EL_SPEED</td>
+            <td><span id="MIN_EL_SPEED">Loading...</span></td>
+            <td>0-255</td>
+            <td>Minimum PWM speed for elevation motor. Lower is faster. Default: 50</td>
+          </tr>
+          <tr>
+            <td>MIN_AZ_SPEED</td>
+            <td><span id="MIN_AZ_SPEED">Loading...</span></td>
+            <td>0-255</td>
+            <td>Minimum PWM speed for azimuth motor. Lower is faster. Default: 100</td>
+          </tr>
+          <tr>
+            <td>MIN_AZ_TOLERANCE</td>
+            <td><span id="MIN_AZ_TOLERANCE">Loading...</span>°</td>
+            <td>0.1-10.0</td>
+            <td>Initial azimuth tolerance when moving. Default: 1.5°</td>
+          </tr>
+          <tr>
+            <td>MIN_EL_TOLERANCE</td>
+            <td><span id="MIN_EL_TOLERANCE">Loading...</span>°</td>
+            <td>0.1-10.0</td>
+            <td>Initial elevation tolerance when moving. Default: 0.1°</td>
+          </tr>
+          <tr>
+            <td>MAX_FAULT_POWER</td>
+            <td><span id="MAX_FAULT_POWER">Loading...</span>W</td>
+            <td>0-25</td>
+            <td>Max power draw before a fault is raised. Default: 10W</td>
+          </tr>
+          <tr>
+            <td>MIN_VOLTAGE_THRESHOLD</td>
+            <td><span id="MIN_VOLTAGE_THRESHOLD">Loading...</span>V</td>
+            <td>1-20</td>
+            <td>Min voltage before low voltage fault is raised. Default: 6V</td>
+          </tr>
+        </table>
 
-      <form action='/setAdvancedParams' method='POST'>
-        <label for='P_el'>P_el (Elevation P-Gain):</label>
-        <input type='number' id='P_el_input' name='P_el' min='-1000' max='1000' step='1'>
+        <form action='/setAdvancedParams' method='POST'>
+          <label for='P_el'>P_el (Elevation P-Gain):</label>
+          <input type='number' id='P_el_input' name='P_el' min='-1000' max='1000' step='1'>
 
-        <label for='P_az'>P_az (Azimuth P-Gain):</label>
-        <input type='number' id='P_az_input' name='P_az' min='-1000' max='1000' step='1'>
+          <label for='P_az'>P_az (Azimuth P-Gain):</label>
+          <input type='number' id='P_az_input' name='P_az' min='-1000' max='1000' step='1'>
 
-        <label for='MIN_EL_SPEED'>MIN_EL_SPEED:</label>
-        <input type='number' id='MIN_EL_SPEED_input' name='MIN_EL_SPEED' min='0' max='255' step='1'>
+          <label for='MIN_EL_SPEED'>MIN_EL_SPEED:</label>
+          <input type='number' id='MIN_EL_SPEED_input' name='MIN_EL_SPEED' min='0' max='255' step='1'>
 
-        <label for='MIN_AZ_SPEED'>MIN_AZ_SPEED:</label>
-        <input type='number' id='MIN_AZ_SPEED_input' name='MIN_AZ_SPEED' min='0' max='255' step='1'>
+          <label for='MIN_AZ_SPEED'>MIN_AZ_SPEED:</label>
+          <input type='number' id='MIN_AZ_SPEED_input' name='MIN_AZ_SPEED' min='0' max='255' step='1'>
 
-        <label for='MIN_AZ_TOLERANCE'>MIN_AZ_TOLERANCE (degrees):</label>
-        <input type='number' id='MIN_AZ_TOLERANCE_input' name='MIN_AZ_TOLERANCE' min='0.1' max='10.0' step='0.1'>
+          <label for='MIN_AZ_TOLERANCE'>MIN_AZ_TOLERANCE (degrees):</label>
+          <input type='number' id='MIN_AZ_TOLERANCE_input' name='MIN_AZ_TOLERANCE' min='0.1' max='10.0' step='0.1'>
 
-        <label for='MIN_EL_TOLERANCE'>MIN_EL_TOLERANCE (degrees):</label>
-        <input type='number' id='MIN_EL_TOLERANCE_input' name='MIN_EL_TOLERANCE' min='0.1' max='10.0' step='0.1'>
+          <label for='MIN_EL_TOLERANCE'>MIN_EL_TOLERANCE (degrees):</label>
+          <input type='number' id='MIN_EL_TOLERANCE_input' name='MIN_EL_TOLERANCE' min='0.1' max='10.0' step='0.1'>
 
-        <label for='MAX FAULT POWER'>MAX FAULT POWER (watts):</label>
-        <input type='number' id='MAX_FAULT_POWER_input' name='MAX_FAULT_POWER' min='0' max='25' step='1'>
+          <label for='MAX FAULT POWER'>MAX FAULT POWER (watts):</label>
+          <input type='number' id='MAX_FAULT_POWER_input' name='MAX_FAULT_POWER' min='0' max='25' step='1'>
 
-        <input type='submit' value='Update Advanced Parameters'>
-      </form>
-    </div>
+          <label for='MIN_VOLTAGE_THRESHOLD'>MIN VOLTAGE THRESHOLD (volts):</label>
+          <input type='number' id='MIN_VOLTAGE_THRESHOLD_input' name='MIN_VOLTAGE_THRESHOLD' min='1' max='20' step='1'>
+
+          <input type='submit' value='Update Advanced Parameters'>
+        </form>
+      </div>
   </div>
 
   <script src="/script.js"></script>
