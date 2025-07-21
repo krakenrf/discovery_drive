@@ -77,6 +77,37 @@ setInterval(function() {
       document.getElementById('bar3').classList.toggle('active', level >= 3);
       document.getElementById('bar4').classList.toggle('active', level >= 4);
 
+      // Wind safety status updates
+      document.getElementById("windStowActive").innerHTML = data.windStowActive;
+      document.getElementById("windStowReason").innerHTML = data.windStowReason;
+      document.getElementById("windSafetyEnabled").innerHTML = data.windSafetyEnabled;
+      document.getElementById("windBasedHomeEnabled").innerHTML = data.windBasedHomeEnabled;
+      document.getElementById("windSpeedThreshold").innerHTML = data.windSpeedThreshold;
+      document.getElementById("windGustThreshold").innerHTML = data.windGustThreshold;
+      document.getElementById("emergencyStowActive").innerHTML = data.emergencyStowActive;
+      document.getElementById("stowDirection").innerHTML = data.stowDirection;
+
+      // Update wind safety checkboxes
+      var windSafetyCheckbox = document.getElementById("windSafetyToggle");
+      if (windSafetyCheckbox) {
+        windSafetyCheckbox.checked = (data.windSafetyEnabled === "ON");
+      }
+
+      var windBasedHomeCheckbox = document.getElementById("windBasedHomeToggle");
+      if (windBasedHomeCheckbox) {
+        windBasedHomeCheckbox.checked = (data.windBasedHomeEnabled === "ON");
+      }
+
+      // Show/hide wind stow alert
+      var windStowAlert = document.getElementById("windStowAlert");
+      var windStowMessage = document.getElementById("windStowMessage");
+      if (data.emergencyStowActive === "YES") {
+        windStowMessage.innerHTML = "⚠️ EMERGENCY WIND STOW ACTIVE: " + data.windStowReason;
+        windStowAlert.style.display = "block";
+      } else {
+        windStowAlert.style.display = "none";
+      }
+
       // Handle new log messages with browser-side rolling buffer
       if (data.newLogMessages && data.newLogMessages.trim() !== "") {
         // Split new messages into lines and add them
@@ -176,6 +207,47 @@ setInterval(function() {
   };
   xhr.send();
 }, 250);
+
+// Wind safety control functions
+function toggleWindSafety() {
+  var switchState = document.getElementById("windSafetyToggle").checked;
+  var xhr = new XMLHttpRequest();
+  if (switchState) {
+    xhr.open("GET", "/windSafetyOn", true);
+  } else {
+    xhr.open("GET", "/windSafetyOff", true);
+  }
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState == 4) {
+      if (xhr.status == 200) {
+        console.log("Wind safety setting updated: " + xhr.responseText);
+      } else {
+        console.error("Failed to update wind safety setting");
+      }
+    }
+  };
+  xhr.send();
+}
+
+function toggleWindBasedHome() {
+  var switchState = document.getElementById("windBasedHomeToggle").checked;
+  var xhr = new XMLHttpRequest();
+  if (switchState) {
+    xhr.open("GET", "/windBasedHomeOn", true);
+  } else {
+    xhr.open("GET", "/windBasedHomeOff", true);
+  }
+  xhr.onreadystatechange = function() {
+    if (xhr.readyState == 4) {
+      if (xhr.status == 200) {
+        console.log("Wind-based home setting updated: " + xhr.responseText);
+      } else {
+        console.error("Failed to update wind-based home setting");
+      }
+    }
+  };
+  xhr.send();
+}
 
 // Function to update the log display from the browser-side buffer
 function updateLogDisplay() {
@@ -471,11 +543,17 @@ function updateVariable() {
 
 function submitHome() {
   // Set azimuth and elevation values to 0
-  document.getElementById('new_setpoint_az').value = 0;
-  document.getElementById('new_setpoint_el').value = 0;
+  //document.getElementById('new_setpoint_az').value = 0;
+  //document.getElementById('new_setpoint_el').value = 0;
 
   // Submit the form
-  document.getElementById('az-el-form').submit();
+  //document.getElementById('az-el-form').submit();
+  
+    var form = document.createElement('form');
+    form.method = 'POST';
+    form.action = '/submitHome';
+    document.body.appendChild(form);
+    form.submit();  
 }
 
 // Function to toggle hotspot mode

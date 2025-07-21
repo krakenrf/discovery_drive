@@ -45,6 +45,14 @@ struct WeatherData {
     String errorMessage = "";
 };
 
+struct WindSafetyData {
+    bool emergencyStowActive = false;
+    bool forecastStowActive = false;
+    float currentStowDirection = 0.0;  // Current safe stow azimuth
+    String stowReason = "";           // Why stow is active
+    unsigned long stowActivatedTime = 0;
+};
+
 class WeatherPoller {
 public:
     // Constructor
@@ -75,6 +83,21 @@ public:
     bool isPollingEnabled();
     void setPollingEnabled(bool enabled);
 
+    // Wind safety methods
+    void setWindSafetyEnabled(bool enabled);
+    bool isWindSafetyEnabled();
+    void setWindSpeedThreshold(float threshold);
+    float getWindSpeedThreshold();
+    void setWindGustThreshold(float threshold);
+    float getWindGustThreshold();
+    void setWindBasedHomeEnabled(bool enabled);
+    bool isWindBasedHomeEnabled();
+    
+    WindSafetyData getWindSafetyData();
+    bool shouldActivateEmergencyStow();
+    float calculateOptimalStowDirection(float windDirection);
+    float getWindBasedHomePosition();
+
 private:
     // Dependencies
     Preferences& _preferences;
@@ -86,10 +109,17 @@ private:
     std::atomic<bool> _pollingEnabled{true};
     String _apiKey = "";
     
+    // Wind safety configuration
+    std::atomic<bool> _windSafetyEnabled{false};
+    std::atomic<float> _windSpeedThreshold{50.0};    // km/h
+    std::atomic<float> _windGustThreshold{60.0};     // km/h
+    std::atomic<bool> _windBasedHomeEnabled{false};
+    
     // Timing constants
-    static constexpr unsigned long POLL_INTERVAL_MS = 900000; // 1 hour
+    static constexpr unsigned long POLL_INTERVAL_MS = 900000; // 15 minutes
     static constexpr unsigned long RETRY_INTERVAL_MS = 300000; // 5 minutes on error
-    static constexpr unsigned long HTTP_TIMEOUT_MS = 15000;    // 15 seconds (WeatherAPI can be slower)
+    static constexpr unsigned long HTTP_TIMEOUT_MS = 15000;    // 15 seconds
+    static constexpr unsigned long STOW_HYSTERESIS_MS = 300000; // 5 minutes before clearing stow
     
     // State variables
     std::atomic<unsigned long> _lastPollTime{0};
@@ -99,9 +129,11 @@ private:
     // Thread synchronization
     SemaphoreHandle_t _weatherDataMutex = NULL;
     SemaphoreHandle_t _apiKeyMutex = NULL;
+    SemaphoreHandle_t _windSafetyMutex = NULL;
     
     // Weather data storage
     WeatherData _weatherData;
+    WindSafetyData _windSafetyData;
     
     // Core functionality helpers
     bool shouldPollWeather();
@@ -115,6 +147,12 @@ private:
     void clearWeatherData();
     void setErrorState(const String& error);
     
+    // Wind safety helpers
+    void updateWindSafetyStatus();
+    bool checkCurrentWindConditions();
+    bool checkForecastWindConditions();
+    void setEmergencyStowState(bool active, const String& reason);
+    
     // Utility methods
     float validateWindSpeed(float speed);
     float validateWindDirection(float direction);
@@ -124,6 +162,7 @@ private:
     int getHourFromTimeString(const String& timeStr);
     bool isValidCoordinate(float lat, float lon);
     bool isValidApiKey(const String& key);
+    float normalizeAngle(float angle);
 };
 
 #endif // WEATHER_POLLER_H

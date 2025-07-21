@@ -199,6 +199,23 @@ void WebServerManager::setupMotorControlRoutes() {
         server->send(204);
     });
 
+
+    // In the motor control routes section, update the home function:
+    server->on("/submitHome", HTTP_POST, [this]() {
+        float homeAz = 0.0;
+        float homeEl = 0.0;
+
+        // Check if wind-based home is enabled
+        if (weatherPoller.isWindBasedHomeEnabled()) {
+            homeAz = weatherPoller.getWindBasedHomePosition();
+            _logger.info("Using wind-based home position: " + String(homeAz, 1) + "°");
+        }
+        
+        msc.setSetPointAz(homeAz);
+        msc.setSetPointEl(homeEl);
+        server->send(204);
+    });    
+
     server->on("/calon", HTTP_GET, [this]() {
         msc.activateCalMode(true);
         server->send(200, "text/plain", "Cal is On");
@@ -513,6 +530,65 @@ void WebServerManager::setupConfigurationRoutes() {
     });
 
 
+    // Wind safety configuration routes
+    server->on("/windSafetyOn", HTTP_GET, [this]() {
+        weatherPoller.setWindSafetyEnabled(true);
+        server->send(200, "text/plain", "Wind safety ON");
+    });
+
+    server->on("/windSafetyOff", HTTP_GET, [this]() {
+        weatherPoller.setWindSafetyEnabled(false);
+        server->send(200, "text/plain", "Wind safety OFF");
+    });
+
+    server->on("/windBasedHomeOn", HTTP_GET, [this]() {
+        weatherPoller.setWindBasedHomeEnabled(true);
+        server->send(200, "text/plain", "Wind-based home positioning ON");
+    });
+
+    server->on("/windBasedHomeOff", HTTP_GET, [this]() {
+        weatherPoller.setWindBasedHomeEnabled(false);
+        server->send(200, "text/plain", "Wind-based home positioning OFF");
+    });
+
+    server->on("/setWindThresholds", HTTP_POST, [this]() {
+        bool updated = false;
+        
+        if (server->hasArg("windSpeedThreshold")) {
+            String speedStr = server->arg("windSpeedThreshold");
+            speedStr.trim();
+            if (speedStr.length() > 0) {
+                float speed = speedStr.toFloat();
+                if (speed >= 10.0 && speed <= 200.0) {
+                    weatherPoller.setWindSpeedThreshold(speed);
+                    updated = true;
+                    _logger.info("Wind speed threshold set to: " + String(speed, 1) + " km/h");
+                }
+            }
+        }
+        
+        if (server->hasArg("windGustThreshold")) {
+            String gustStr = server->arg("windGustThreshold");
+            gustStr.trim();
+            if (gustStr.length() > 0) {
+                float gust = gustStr.toFloat();
+                if (gust >= 10.0 && gust <= 200.0) {
+                    weatherPoller.setWindGustThreshold(gust);
+                    updated = true;
+                    _logger.info("Wind gust threshold set to: " + String(gust, 1) + " km/h");
+                }
+            }
+        }
+        
+        if (updated) {
+            server->send(204);
+        } else {
+            server->send(400, "text/plain", "Invalid threshold values");
+        }
+    });
+
+
+
 }
 
 void WebServerManager::setupAPIRoutes() {
@@ -650,6 +726,16 @@ void WebServerManager::setupAPIRoutes() {
             doc["weatherError"] = weatherPoller.getLastError();
         }
 
+        // Wind safety data (add to the existing JSON document in /variable route)
+        auto windSafetyData = weatherPoller.getWindSafetyData();
+        doc["windStowActive"] = String(msc.isWindStowActive() ? "YES" : "NO");
+        doc["windStowReason"] = msc.getWindStowReason();
+        doc["windSafetyEnabled"] = String(weatherPoller.isWindSafetyEnabled() ? "ON" : "OFF");
+        doc["windBasedHomeEnabled"] = String(weatherPoller.isWindBasedHomeEnabled() ? "ON" : "OFF");
+        doc["windSpeedThreshold"] = String(weatherPoller.getWindSpeedThreshold(), 1);
+        doc["windGustThreshold"] = String(weatherPoller.getWindGustThreshold(), 1);
+        doc["emergencyStowActive"] = String(windSafetyData.emergencyStowActive ? "YES" : "NO");
+        doc["stowDirection"] = String(windSafetyData.currentStowDirection, 1);
 
 
         String json;

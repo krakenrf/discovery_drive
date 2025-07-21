@@ -155,6 +155,14 @@
         <td>Rotator Power Draw (W)</td>
         <td><span id="rotatorPowerDraw">Loading...</span></td>
       </tr>
+      <tr>
+        <td>Wind Stow Active</td>
+        <td><span id="windStowActive">Loading...</span></td>
+      </tr>
+      <tr>
+        <td>Wind Stow Reason</td>
+        <td><span id="windStowReason">Loading...</span></td>
+      </tr>
     </table>
 
     <h3>Debug Level Control</h3>
@@ -491,6 +499,77 @@
     <h2>Weather Information & Wind Monitoring</h2>
     <p>Monitor current wind conditions and forecasts to optimize dish positioning and safety.</p>
     <p><strong>Powered by WeatherAPI.com</strong> - Requires a free API key from <a href="https://www.weatherapi.com/" target="_blank">weatherapi.com</a></p>
+    
+    <h3>Wind Safety Configuration</h3>
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Value</th>
+        <th>Description</th>
+      </tr>
+      <tr>
+        <td>Emergency Wind Stow</td>
+        <td><span id="windSafetyEnabled">Loading...</span></td>
+        <td>Automatically stow dish when wind conditions are unsafe</td>
+      </tr>
+      <tr>
+        <td>Wind-Based Home Position</td>
+        <td><span id="windBasedHomeEnabled">Loading...</span></td>
+        <td>Set HOME position based on current wind direction</td>
+      </tr>
+      <tr>
+        <td>Wind Speed Threshold</td>
+        <td><span id="windSpeedThreshold">Loading...</span> km/h</td>
+        <td>Max sustained wind speed before emergency stow</td>
+      </tr>
+      <tr>
+        <td>Wind Gust Threshold</td>
+        <td><span id="windGustThreshold">Loading...</span> km/h</td>
+        <td>Max wind gust before emergency stow</td>
+      </tr>
+      <tr>
+        <td>Emergency Stow Status</td>
+        <td><span id="emergencyStowActive">Loading...</span></td>
+        <td>Current stow status</td>
+      </tr>
+      <tr>
+        <td>Stow Direction</td>
+        <td><span id="stowDirection">Loading...</span>°</td>
+        <td>Current safe stow azimuth position</td>
+      </tr>
+    </table>
+
+    <label>Enable Emergency Wind Stow:</label>
+    <p>
+      <label class="switch">
+        <input type="checkbox" id="windSafetyToggle" onchange="toggleWindSafety()">
+        <span class="slider"></span>
+      </label>
+    </p>
+
+    <label>Enable Wind-Based Home Position:</label>
+    <p>
+      <label class="switch">
+        <input type="checkbox" id="windBasedHomeToggle" onchange="toggleWindBasedHome()">
+        <span class="slider"></span>
+      </label>
+    </p>
+
+    <form action='/setWindThresholds' method='POST'>
+      <label for='windSpeedThreshold'>Wind Speed Threshold (km/h):</label>
+      <input type='number' id='windSpeedThresholdInput' name='windSpeedThreshold' min='10' max='200' step='1' placeholder='50'>
+      
+      <label for='windGustThreshold'>Wind Gust Threshold (km/h):</label>
+      <input type='number' id='windGustThresholdInput' name='windGustThreshold' min='10' max='200' step='1' placeholder='60'>
+      
+      <input type='submit' value='Set Wind Thresholds'>
+    </form>
+
+    <div id="windStowAlert" style="color: red; font-weight: bold; margin: 10px 0; display: none;">
+      <span id="windStowMessage"></span>
+    </div>
+
+    <br/>
     
     <table>
       <tr>

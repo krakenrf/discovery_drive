@@ -99,6 +99,11 @@ void setup() {
   // Initialize weather poller
   weatherPoller.begin();
 
+  // IMPORTANT: Set up the cross-reference between weather poller and motor controller
+  // This enables wind safety features
+  motorSensorCtrl.setWeatherPoller(&weatherPoller);
+  logger.info("Wind safety integration enabled");
+
   xTaskCreatePinnedToCore(
     HandleWebRequests
     ,  "Web Server Task"
@@ -251,7 +256,7 @@ void PollStellarium(void *pvParameters){
   }
 }
 
-// Poll weather data for wind information
+// Poll weather data for wind information and wind safety
 void PollWeather(void *pvParameters){
   TickType_t xLastWakeTime = xTaskGetTickCount();
   TickType_t xFrequency;
@@ -259,8 +264,17 @@ void PollWeather(void *pvParameters){
   for(;;)
   {
     weatherPoller.runWeatherLoop(wifiManager.wifiConnected);
-    xFrequency = weatherPoller.isPollingEnabled() ? 
-            pdMS_TO_TICKS(5000) : pdMS_TO_TICKS(60000); // 5s when active, 60s when disabled
+    
+    // Adjust frequency based on wind safety status
+    if (weatherPoller.isWindSafetyEnabled() && weatherPoller.shouldActivateEmergencyStow()) {
+      // Poll more frequently during active wind stow conditions
+      xFrequency = pdMS_TO_TICKS(2000); // 2 seconds during emergency
+    } else if (weatherPoller.isPollingEnabled()) {
+      xFrequency = pdMS_TO_TICKS(5000);  // 5 seconds normal operation
+    } else {
+      xFrequency = pdMS_TO_TICKS(60000); // 60 seconds when disabled
+    }
+    
     vTaskDelayUntil(&xLastWakeTime, xFrequency);
     // ------------------------------------------------------------------------
   }

@@ -29,6 +29,9 @@
 #include "ina219_manager.h"
 #include "logger.h"
 
+// Forward declaration to avoid circular dependency
+class WeatherPoller;
+
 class MotorSensorController {
 public:
     // Constructor
@@ -38,6 +41,9 @@ public:
     void begin();
     void runControlLoop();
     void runSafetyLoop();
+    
+    // Weather integration
+    void setWeatherPoller(WeatherPoller* weatherPoller);
 
     // Setpoint and angle access methods
     float getSetPointAz();
@@ -83,6 +89,13 @@ public:
     void calibrate_elevation();
     void playOdeToJoy();
 
+    // Wind safety methods
+    bool isWindStowActive();
+    String getWindStowReason();
+    float getWindStowDirection();
+    void performWindStow();
+    bool isMovementBlocked();
+
     // Utility methods
     int convertPercentageToSpeed(float percentage);
     int convertSpeedToPercentage(float speed);
@@ -101,6 +114,9 @@ public:
     std::atomic<bool> calMode = false;
     std::atomic<bool> singleMotorMode = false;
     std::atomic<int> needs_unwind = 0;
+    
+    // Wind stow state
+    std::atomic<bool> _windStowActive = false;
     
     // Fault and error flags
     std::atomic<bool> global_fault = false;
@@ -129,6 +145,7 @@ private:
     Preferences& _preferences;
     INA219Manager& ina219Manager;
     Logger& _logger;
+    WeatherPoller* _weatherPoller = nullptr;
 
     // Hardware configuration constants
     static constexpr int _el_hall_i2c_addr = 0x36;  // AS5600
@@ -193,6 +210,12 @@ private:
     int _quadrantNumber_az = 0;
     int _previousquadrantNumber_az = 0;
     
+    // Wind stow state
+    String _windStowReason = "";
+    float _windStowDirection = 0.0;
+    unsigned long _lastWindStowUpdate = 0;
+    static constexpr unsigned long WIND_STOW_UPDATE_INTERVAL = 5000; // 5 seconds
+    
     // Oscillation detection
     unsigned long _oscillationTimerStart = 0;
     int _oscillationCount = 0;
@@ -234,6 +257,7 @@ private:
     SemaphoreHandle_t _correctedAngleMutex = NULL;
     SemaphoreHandle_t _errorMutex = NULL;
     SemaphoreHandle_t _el_startAngleMutex = NULL;
+    SemaphoreHandle_t _windStowMutex = NULL;
 
     // Motor control methods
     void actuate_motor_az(int min_speed);
@@ -242,6 +266,11 @@ private:
     void updateMotorControl(float current_setpoint_az, float current_setpoint_el, 
                            bool setPointAzUpdated, bool setPointElUpdated);
     void updateMotorPriority(bool setPointAzUpdated, bool setPointElUpdated);
+    
+    // Wind safety methods
+    void updateWindStowStatus();
+    void setWindStowActive(bool active, const String& reason, float direction);
+    bool shouldBlockMovement();
     
     // Angle calculation methods
     void angle_shortest_error_az(float target_angle, float current_angle);

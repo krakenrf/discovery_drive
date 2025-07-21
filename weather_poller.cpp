@@ -30,12 +30,19 @@ void WeatherPoller::begin() {
     // Create mutexes for thread-safe access
     _weatherDataMutex = xSemaphoreCreateMutex();
     _apiKeyMutex = xSemaphoreCreateMutex();
+    _windSafetyMutex = xSemaphoreCreateMutex();
     
     // Load saved configuration
     _latitude = _preferences.getFloat("weather_lat", 0.0);
     _longitude = _preferences.getFloat("weather_lon", 0.0);
     _pollingEnabled = _preferences.getBool("weather_enabled", true);
     _apiKey = _preferences.getString("weather_api_key", "");
+    
+    // Load wind safety configuration
+    _windSafetyEnabled = _preferences.getBool("wind_safety_enabled", false);
+    _windSpeedThreshold = _preferences.getFloat("wind_speed_threshold", 50.0);
+    _windGustThreshold = _preferences.getFloat("wind_gust_threshold", 60.0);
+    _windBasedHomeEnabled = _preferences.getBool("wind_based_home", false);
     
     // Initialize weather data
     clearWeatherData();
@@ -59,6 +66,12 @@ void WeatherPoller::begin() {
     }
     
     _logger.info(configStatus);
+    
+    // Log wind safety configuration
+    if (_windSafetyEnabled) {
+        _logger.info("Wind safety enabled - Speed threshold: " + String(_windSpeedThreshold.load(), 1) + 
+                    " km/h, Gust threshold: " + String(_windGustThreshold.load(), 1) + " km/h");
+    }
 }
 
 // =============================================================================
@@ -92,6 +105,7 @@ void WeatherPoller::runWeatherLoop(bool wifiConnected) {
     
     if (pollWeatherData()) {
         _lastSuccessTime = millis();
+        updateWindSafetyStatus(); // Update wind safety after successful poll
         _logger.info("Weather data updated successfully");
     } else {
         _logger.warn("Failed to update weather data");
@@ -202,7 +216,6 @@ bool WeatherPoller::processWeatherResponse(const String& payload) {
         if (_weatherDataMutex != NULL && xSemaphoreTake(_weatherDataMutex, portMAX_DELAY) == pdTRUE) {
             _weatherData.dataValid = true;
             _weatherData.errorMessage = "";
-            // lastUpdateTime is now set directly from WeatherAPI's last_updated field in extractCurrentWeather()
             xSemaphoreGive(_weatherDataMutex);
         }
         return true;
@@ -213,7 +226,201 @@ bool WeatherPoller::processWeatherResponse(const String& payload) {
 }
 
 // =============================================================================
-// DATA PROCESSING HELPERS
+// WIND SAFETY METHODS
+// =============================================================================
+
+void WeatherPoller::updateWindSafetyStatus() {
+    if (!_windSafetyEnabled) {
+        setEmergencyStowState(false, "");
+        return;
+    }
+    
+    if (!isDataValid()) {
+        _logger.warn("Cannot update wind safety - no valid weather data");
+        return;
+    }
+    
+    bool currentConditionsTriggered = checkCurrentWindConditions();
+    bool forecastConditionsTriggered = checkForecastWindConditions();
+    
+    if (currentConditionsTriggered || forecastConditionsTriggered) {
+        String reason = "";
+        if (currentConditionsTriggered && forecastConditionsTriggered) {
+            reason = "Current and forecast wind conditions exceed thresholds";
+        } else if (currentConditionsTriggered) {
+            reason = "Current wind conditions exceed thresholds";
+        } else {
+            reason = "Forecast wind conditions exceed thresholds";
+        }
+        
+        setEmergencyStowState(true, reason);
+    } else {
+        // Check if we should clear the stow state (with hysteresis)
+        if (_windSafetyMutex != NULL && xSemaphoreTake(_windSafetyMutex, portMAX_DELAY) == pdTRUE) {
+            if (_windSafetyData.emergencyStowActive && 
+                (millis() - _windSafetyData.stowActivatedTime) > STOW_HYSTERESIS_MS) {
+                setEmergencyStowState(false, "");
+            }
+            xSemaphoreGive(_windSafetyMutex);
+        }
+    }
+}
+
+bool WeatherPoller::checkCurrentWindConditions() {
+    WeatherData data = getWeatherData();
+    
+    float speedThreshold = _windSpeedThreshold.load();
+    float gustThreshold = _windGustThreshold.load();
+    
+    bool speedExceeded = data.currentWindSpeed > speedThreshold;
+    bool gustExceeded = data.currentWindGust > gustThreshold;
+    
+    if (speedExceeded || gustExceeded) {
+        _logger.info("Current wind conditions exceed thresholds - Speed: " + 
+                    String(data.currentWindSpeed, 1) + " km/h (limit: " + String(speedThreshold, 1) + 
+                    "), Gust: " + String(data.currentWindGust, 1) + " km/h (limit: " + String(gustThreshold, 1) + ")");
+        return true;
+    }
+    
+    return false;
+}
+
+bool WeatherPoller::checkForecastWindConditions() {
+    WeatherData data = getWeatherData();
+    
+    float speedThreshold = _windSpeedThreshold.load();
+    float gustThreshold = _windGustThreshold.load();
+    
+    // Check next hour forecast (index 0)
+    if (data.forecastWindSpeed[0] > speedThreshold || data.forecastWindGust[0] > gustThreshold) {
+        _logger.info("Next hour forecast exceeds thresholds - Speed: " + 
+                    String(data.forecastWindSpeed[0], 1) + " km/h (limit: " + String(speedThreshold, 1) + 
+                    "), Gust: " + String(data.forecastWindGust[0], 1) + " km/h (limit: " + String(gustThreshold, 1) + ")");
+        return true;
+    }
+    
+    return false;
+}
+
+void WeatherPoller::setEmergencyStowState(bool active, const String& reason) {
+    if (_windSafetyMutex != NULL && xSemaphoreTake(_windSafetyMutex, portMAX_DELAY) == pdTRUE) {
+        bool wasActive = _windSafetyData.emergencyStowActive;
+        
+        _windSafetyData.emergencyStowActive = active;
+        _windSafetyData.stowReason = reason;
+        
+        if (active) {
+            _windSafetyData.stowActivatedTime = millis();
+            
+            // Calculate optimal stow direction based on current wind
+            WeatherData data = getWeatherData();
+            _windSafetyData.currentStowDirection = calculateOptimalStowDirection(data.currentWindDirection);
+            
+            if (!wasActive) {
+                _logger.warn("EMERGENCY WIND STOW ACTIVATED: " + reason + 
+                           " - Stow direction: " + String(_windSafetyData.currentStowDirection, 1) + "°");
+            }
+        } else {
+            if (wasActive) {
+                _logger.info("Emergency wind stow deactivated - conditions have improved");
+            }
+            _windSafetyData.currentStowDirection = 0.0;
+        }
+        
+        xSemaphoreGive(_windSafetyMutex);
+    }
+}
+
+float WeatherPoller::calculateOptimalStowDirection(float windDirection) {
+    // Position dish edge-on to wind for minimum wind load
+    // Choose the +90° or -90° option that requires less movement from current position
+    
+    float option1 = normalizeAngle(windDirection + 90.0);
+    float option2 = normalizeAngle(windDirection - 90.0);
+    
+    // For now, default to +90° (can be improved to consider current dish position)
+    return option1;
+}
+
+float WeatherPoller::getWindBasedHomePosition() {
+    if (!_windBasedHomeEnabled || !isDataValid()) {
+        return 0.0; // Default home position
+    }
+    
+    WeatherData data = getWeatherData();
+    return calculateOptimalStowDirection(data.currentWindDirection);
+}
+
+WindSafetyData WeatherPoller::getWindSafetyData() {
+    WindSafetyData data;
+    
+    if (_windSafetyMutex != NULL && xSemaphoreTake(_windSafetyMutex, portMAX_DELAY) == pdTRUE) {
+        data = _windSafetyData;
+        xSemaphoreGive(_windSafetyMutex);
+    }
+    
+    return data;
+}
+
+bool WeatherPoller::shouldActivateEmergencyStow() {
+    WindSafetyData safetyData = getWindSafetyData();
+    return safetyData.emergencyStowActive;
+}
+
+// =============================================================================
+// WIND SAFETY CONFIGURATION METHODS
+// =============================================================================
+
+void WeatherPoller::setWindSafetyEnabled(bool enabled) {
+    _windSafetyEnabled = enabled;
+    _preferences.putBool("wind_safety_enabled", enabled);
+    _logger.info("Wind safety " + String(enabled ? "enabled" : "disabled"));
+    
+    if (!enabled) {
+        setEmergencyStowState(false, "");
+    }
+}
+
+bool WeatherPoller::isWindSafetyEnabled() {
+    return _windSafetyEnabled.load();
+}
+
+void WeatherPoller::setWindSpeedThreshold(float threshold) {
+    if (threshold > 0 && threshold <= 200) {
+        _windSpeedThreshold = threshold;
+        _preferences.putFloat("wind_speed_threshold", threshold);
+        _logger.info("Wind speed threshold set to: " + String(threshold, 1) + " km/h");
+    }
+}
+
+float WeatherPoller::getWindSpeedThreshold() {
+    return _windSpeedThreshold.load();
+}
+
+void WeatherPoller::setWindGustThreshold(float threshold) {
+    if (threshold > 0 && threshold <= 200) {
+        _windGustThreshold = threshold;
+        _preferences.putFloat("wind_gust_threshold", threshold);
+        _logger.info("Wind gust threshold set to: " + String(threshold, 1) + " km/h");
+    }
+}
+
+float WeatherPoller::getWindGustThreshold() {
+    return _windGustThreshold.load();
+}
+
+void WeatherPoller::setWindBasedHomeEnabled(bool enabled) {
+    _windBasedHomeEnabled = enabled;
+    _preferences.putBool("wind_based_home", enabled);
+    _logger.info("Wind-based home positioning " + String(enabled ? "enabled" : "disabled"));
+}
+
+bool WeatherPoller::isWindBasedHomeEnabled() {
+    return _windBasedHomeEnabled.load();
+}
+
+// =============================================================================
+// DATA PROCESSING HELPERS (unchanged from original)
 // =============================================================================
 
 bool WeatherPoller::extractCurrentWeather(JsonDocument& doc) {
@@ -352,7 +559,7 @@ void WeatherPoller::setErrorState(const String& error) {
 }
 
 // =============================================================================
-// CONFIGURATION METHODS
+// CONFIGURATION METHODS (unchanged from original)
 // =============================================================================
 
 bool WeatherPoller::setLocation(float latitude, float longitude) {
@@ -440,7 +647,7 @@ bool WeatherPoller::isFullyConfigured() {
 }
 
 // =============================================================================
-// DATA ACCESS METHODS
+// DATA ACCESS METHODS (unchanged from original)
 // =============================================================================
 
 WeatherData WeatherPoller::getWeatherData() {
@@ -481,7 +688,7 @@ unsigned long WeatherPoller::getLastUpdateTime() {
 }
 
 // =============================================================================
-// CONTROL METHODS
+// CONTROL METHODS (unchanged from original)
 // =============================================================================
 
 void WeatherPoller::forceUpdate() {
@@ -500,11 +707,12 @@ void WeatherPoller::setPollingEnabled(bool enabled) {
     
     if (!enabled) {
         clearWeatherData();
+        setEmergencyStowState(false, "");
     }
 }
 
 // =============================================================================
-// UTILITY METHODS
+// UTILITY METHODS (unchanged from original)
 // =============================================================================
 
 String WeatherPoller::buildApiUrl() {
@@ -543,6 +751,12 @@ float WeatherPoller::validateWindDirection(float direction) {
     while (direction < 0) direction += 360;
     while (direction >= 360) direction -= 360;
     return direction;
+}
+
+float WeatherPoller::normalizeAngle(float angle) {
+    while (angle < 0) angle += 360;
+    while (angle >= 360) angle -= 360;
+    return angle;
 }
 
 int WeatherPoller::getCurrentHourFromTime(const String& timeStr) {

@@ -17,6 +17,7 @@
  */
 
 #include "motor_controller.h"
+#include "weather_poller.h"  // Include for wind safety integration
 
 // =============================================================================
 // CONSTRUCTOR AND INITIALIZATION
@@ -31,6 +32,7 @@ MotorSensorController::MotorSensorController(Preferences& prefs, INA219Manager& 
     _correctedAngleMutex = xSemaphoreCreateMutex();
     _errorMutex = xSemaphoreCreateMutex();
     _el_startAngleMutex = xSemaphoreCreateMutex();
+    _windStowMutex = xSemaphoreCreateMutex();
 }
 
 void MotorSensorController::begin() {
@@ -103,10 +105,22 @@ void MotorSensorController::begin() {
 }
 
 // =============================================================================
+// WEATHER INTEGRATION
+// =============================================================================
+
+void MotorSensorController::setWeatherPoller(WeatherPoller* weatherPoller) {
+    _weatherPoller = weatherPoller;
+    _logger.info("Weather poller integration enabled");
+}
+
+// =============================================================================
 // MAIN CONTROL LOOPS
 // =============================================================================
 
 void MotorSensorController::runControlLoop() {
+    // Update wind stow status first
+    updateWindStowStatus();
+    
     // Get current setpoints and update flags
     float current_setpoint_az = getSetPointAz();
     float current_setpoint_el = getSetPointEl();    
@@ -139,10 +153,18 @@ void MotorSensorController::runControlLoop() {
         //checkStall(); // TEMP DISABLE
     }
 
-    // Execute control logic
+    // Execute control logic - but check for movement blocking first
     if (!calMode) {
         updateMotorControl(current_setpoint_az, current_setpoint_el, setPointAzUpdated, setPointElUpdated);
         updateMotorPriority(setPointAzUpdated, setPointElUpdated);
+        
+        // Apply wind stow movement blocking
+        if (shouldBlockMovement()) {
+            // Override motor states to stop movement
+            setPointState_az = false;
+            setPointState_el = false;
+        }
+        
         actuate_motor_az(MIN_AZ_SPEED);
         actuate_motor_el(MIN_EL_SPEED);
     } else {
@@ -236,8 +258,8 @@ void MotorSensorController::runSafetyLoop() {
         }
     }
 
-    // Emergency stop on fault (except in calibration mode)
-    if (global_fault && !calMode) {
+    // Emergency stop on fault (except in calibration mode and wind stow mode)
+    if (global_fault && !calMode && !_windStowActive) {
         setPWM(_pwm_pin_el, 255);
         setPWM(_pwm_pin_az, 255);
         errorText += "EMERGENCY ALL STOP. RESTART ESP32 TO CLEAR FAULTS.\n";
@@ -247,7 +269,136 @@ void MotorSensorController::runSafetyLoop() {
 }
 
 // =============================================================================
-// ERROR CONVERGENCE SAFETY METHODS
+// WIND SAFETY METHODS
+// =============================================================================
+
+void MotorSensorController::updateWindStowStatus() {
+    if (_weatherPoller == nullptr) {
+        return;
+    }
+    
+    // Update at regular intervals
+    unsigned long currentTime = millis();
+    if (currentTime - _lastWindStowUpdate < WIND_STOW_UPDATE_INTERVAL) {
+        return;
+    }
+    _lastWindStowUpdate = currentTime;
+    
+    // Check if emergency stow should be active
+    if (_weatherPoller->shouldActivateEmergencyStow()) {
+        auto windSafetyData = _weatherPoller->getWindSafetyData();
+        setWindStowActive(true, windSafetyData.stowReason, windSafetyData.currentStowDirection);
+        
+        // Perform the actual stow positioning
+        performWindStow();
+    } else {
+        setWindStowActive(false, "", 0.0);
+    }
+}
+
+void MotorSensorController::setWindStowActive(bool active, const String& reason, float direction) {
+    if (_windStowMutex != NULL && xSemaphoreTake(_windStowMutex, portMAX_DELAY) == pdTRUE) {
+        bool wasActive = _windStowActive;
+        
+        _windStowActive = active;
+        _windStowReason = reason;
+        _windStowDirection = direction;
+        
+        if (active && !wasActive) {
+            _logger.warn("WIND STOW ACTIVATED: " + reason + 
+                       " - Moving to safe direction: " + String(direction, 1) + "°");
+        } else if (!active && wasActive) {
+            _logger.info("Wind stow deactivated - normal operation resumed");
+        }
+        
+        xSemaphoreGive(_windStowMutex);
+    }
+}
+
+void MotorSensorController::performWindStow() {
+    if (!_windStowActive) {
+        return;
+    }
+    
+    // Set the dish to the wind-safe position (edge-on to wind)
+    if (_windStowMutex != NULL && xSemaphoreTake(_windStowMutex, portMAX_DELAY) == pdTRUE) {
+        float stowAz = _windStowDirection;
+        float stowEl = 0.0; // Lower elevation for wind safety
+        
+        // Override normal setpoints for wind stow
+        setSetPointAz(stowAz);
+        setSetPointEl(stowEl);
+        
+        xSemaphoreGive(_windStowMutex);
+    }
+}
+
+bool MotorSensorController::shouldBlockMovement() {
+    // Block external movement commands when in wind stow mode
+    // Allow internal wind stow movements to continue
+    return _windStowActive && !calMode;
+}
+
+bool MotorSensorController::isWindStowActive() {
+    return _windStowActive.load();
+}
+
+String MotorSensorController::getWindStowReason() {
+    String reason = "";
+    if (_windStowMutex != NULL && xSemaphoreTake(_windStowMutex, portMAX_DELAY) == pdTRUE) {
+        reason = _windStowReason;
+        xSemaphoreGive(_windStowMutex);
+    }
+    return reason;
+}
+
+float MotorSensorController::getWindStowDirection() {
+    float direction = 0.0;
+    if (_windStowMutex != NULL && xSemaphoreTake(_windStowMutex, portMAX_DELAY) == pdTRUE) {
+        direction = _windStowDirection;
+        xSemaphoreGive(_windStowMutex);
+    }
+    return direction;
+}
+
+bool MotorSensorController::isMovementBlocked() {
+    return shouldBlockMovement();
+}
+
+// =============================================================================
+// MODIFIED SETPOINT METHODS TO HANDLE WIND STOW
+// =============================================================================
+
+void MotorSensorController::setSetPointAz(float value) {
+    // Block external setpoint changes during wind stow (except during calibration)
+    if (_windStowActive && !calMode) {
+        _logger.warn("Azimuth setpoint change blocked - wind stow active");
+        return;
+    }
+    
+    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
+        _setpoint_az = value;
+        _setPointAzUpdated = true;
+        xSemaphoreGive(_setPointMutex);
+    }
+}
+
+void MotorSensorController::setSetPointEl(float value) {
+    // Block external setpoint changes during wind stow (except during calibration)
+    if (_windStowActive && !calMode) {
+        _logger.warn("Elevation setpoint change blocked - wind stow active");
+        return;
+    }
+    
+    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
+        _setpoint_el = value;
+        _setPointElUpdated = true;
+        xSemaphoreGive(_setPointMutex);
+    }
+}
+
+// =============================================================================
+// ERROR CONVERGENCE SAFETY METHODS (unchanged from original)
 // =============================================================================
 
 void MotorSensorController::updateErrorTracking() {
@@ -427,7 +578,7 @@ void MotorSensorController::resetErrorTracker(ErrorTracker& tracker) {
 }
 
 // =============================================================================
-// MOTOR CONTROL
+// MOTOR CONTROL (unchanged from original)
 // =============================================================================
 
 void MotorSensorController::actuate_motor_az(int MIN_SPEED) {
@@ -472,8 +623,6 @@ void MotorSensorController::actuate_motor_az(int MIN_SPEED) {
         setPWM(_pwm_pin_az, 255);
         _current_speed_az = MIN_SPEED;
     }
-
-
 }
 
 void MotorSensorController::actuate_motor_el(int MIN_SPEED) {
@@ -512,7 +661,6 @@ void MotorSensorController::actuate_motor_el(int MIN_SPEED) {
         delayMicroseconds(150000);
         setPWM(_pwm_pin_el, _current_speed_el);
       }
-
 
     } else {
         // Stop motor
@@ -597,7 +745,11 @@ void MotorSensorController::setPWM(int pin, int PWM) {
 }
 
 // =============================================================================
-// ANGLE CALCULATION AND ERROR HANDLING
+// REMAINING METHODS (angle calculation, sensor reading, etc. - unchanged from original)
+// =============================================================================
+
+// =============================================================================
+// ANGLE CALCULATION AND ERROR HANDLING (unchanged from original)
 // =============================================================================
 
 void MotorSensorController::angle_shortest_error_az(float target_angle, float current_angle) {
@@ -680,7 +832,7 @@ void MotorSensorController::calcIfNeedsUnwind(float correctedAngle_az) {
 }
 
 // =============================================================================
-// SENSOR READING AND I2C COMMUNICATION
+// SENSOR READING AND I2C COMMUNICATION (unchanged from original)
 // =============================================================================
 
 float MotorSensorController::getAvgAngle(int i2c_addr) {
@@ -845,24 +997,8 @@ float MotorSensorController::calculateAngleMeanWithDiscard(float* array, int siz
 }
 
 // =============================================================================
-// SETPOINT AND ANGLE ACCESS METHODS
+// SETPOINT AND ANGLE ACCESS METHODS (updated with wind stow checks)
 // =============================================================================
-
-void MotorSensorController::setSetPointAz(float value) {
-    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
-        _setpoint_az = value;
-        _setPointAzUpdated = true;
-        xSemaphoreGive(_setPointMutex);
-    }
-}
-
-void MotorSensorController::setSetPointEl(float value) {
-    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
-        _setpoint_el = value;
-        _setPointElUpdated = true;
-        xSemaphoreGive(_setPointMutex);
-    }
-}
 
 float MotorSensorController::getSetPointAz() {
     float result = 0;
@@ -967,7 +1103,6 @@ int MotorSensorController::getMinVoltageThreshold() {
     return _minVoltageThreshold;
 }
 
-// Add new setter method:
 void MotorSensorController::setMinVoltageThreshold(int value) {
     if (value > 0 && value < 20) {
         _minVoltageThreshold = value;
@@ -988,7 +1123,7 @@ void MotorSensorController::setMaxPowerBeforeFault(int value) {
 }
 
 // =============================================================================
-// CONFIGURATION PARAMETER SETTERS
+// CONFIGURATION PARAMETER SETTERS (unchanged from original)
 // =============================================================================
 
 void MotorSensorController::setPEl(int value) {
@@ -1040,7 +1175,7 @@ void MotorSensorController::setMinElTolerance(float value) {
 }
 
 // =============================================================================
-// CALIBRATION METHODS
+// CALIBRATION METHODS (unchanged from original)
 // =============================================================================
 
 void MotorSensorController::activateCalMode(bool on) {
@@ -1111,7 +1246,7 @@ void MotorSensorController::handleCalibrationMode() {
 }
 
 // =============================================================================
-// UTILITY METHODS
+// UTILITY METHODS (unchanged from original)
 // =============================================================================
 
 void MotorSensorController::handleOscillationDetection() {
