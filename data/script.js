@@ -410,16 +410,16 @@ function drawPositions(azimuth, elevation, setpoint_az, setpoint_el) {
     {
       az: azimuth * toRadians + adjustedAzimuth,
       el: 1 - (elevation / 90),
-      radius: 5,
-      color: 'red',
-      fill: true
+      radius: 8,
+      color: 'blue',
+      fill: false
     },
     {
       az: setpoint_az * toRadians + adjustedAzimuth,
       el: 1 - (setpoint_el / 90),
-      radius: 8,
-      color: 'blue',
-      fill: false
+      radius: 5,
+      color: 'red',
+      fill: true
     }
   ];
 
