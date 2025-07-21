@@ -87,7 +87,7 @@ private:
     String _apiKey = "";
     
     // Timing constants
-    static constexpr unsigned long POLL_INTERVAL_MS = 900000; // 15 minutes
+    static constexpr unsigned long POLL_INTERVAL_MS = 900000; // 1 hour
     static constexpr unsigned long RETRY_INTERVAL_MS = 300000; // 5 minutes on error
     static constexpr unsigned long HTTP_TIMEOUT_MS = 15000;    // 15 seconds (WeatherAPI can be slower)
     
@@ -120,6 +120,8 @@ private:
     float validateWindDirection(float direction);
     String formatWeatherApiTime(const String& apiTime);
     String getRelativeUpdateTime();
+    int getCurrentHourFromTime(const String& timeStr);
+    int getHourFromTimeString(const String& timeStr);
     bool isValidCoordinate(float lat, float lon);
     bool isValidApiKey(const String& key);
 };

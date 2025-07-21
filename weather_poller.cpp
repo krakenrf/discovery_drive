@@ -269,22 +269,60 @@ bool WeatherPoller::extractForecastWeather(JsonDocument& doc) {
         return false;
     }
     
+    // Get current time from the API response to find our position
+    String currentTimeStr = "";
+    if (doc.containsKey("current") && doc["current"].containsKey("last_updated")) {
+        currentTimeStr = doc["current"]["last_updated"].as<String>();
+    }
+    
     if (_weatherDataMutex != NULL && xSemaphoreTake(_weatherDataMutex, portMAX_DELAY) == pdTRUE) {
-        // Extract next 3 hours of forecast data
         int forecastCount = 0;
+        int currentHour = getCurrentHourFromTime(currentTimeStr);
         
-        // Find current hour or next available hour
+        _logger.debug("Current time: " + currentTimeStr + ", current hour: " + String(currentHour) + ", looking for hours > " + String(currentHour));
+        
+        // Find the next available hours starting from current hour + 1
         for (int i = 0; i < hours.size() && forecastCount < 3; i++) {
             JsonObject hour = hours[i];
             String hourTime = hour["time"].as<String>();
+            int hourValue = getHourFromTimeString(hourTime);
             
-            // Extract hour data
-            _weatherData.forecastTimes[forecastCount] = hourTime;
-            _weatherData.forecastWindSpeed[forecastCount] = validateWindSpeed(hour["wind_kph"]);
-            _weatherData.forecastWindDirection[forecastCount] = validateWindDirection(hour["wind_degree"]);
-            _weatherData.forecastWindGust[forecastCount] = validateWindSpeed(hour["gust_kph"]);
-            
-            forecastCount++;
+            // Only include hours that are in the future (current hour + 1 or later)
+            if (hourValue > currentHour) {
+                _weatherData.forecastTimes[forecastCount] = hourTime;
+                _weatherData.forecastWindSpeed[forecastCount] = validateWindSpeed(hour["wind_kph"]);
+                _weatherData.forecastWindDirection[forecastCount] = validateWindDirection(hour["wind_degree"]);
+                _weatherData.forecastWindGust[forecastCount] = validateWindSpeed(hour["gust_kph"]);
+                
+                _logger.debug("Forecast " + String(forecastCount) + ": " + hourTime + 
+                             " - Wind: " + String(_weatherData.forecastWindSpeed[forecastCount], 1) + " km/h");
+                
+                forecastCount++;
+            }
+        }
+        
+        // If we couldn't find 3 future hours (maybe it's late in the day), 
+        // try to get some from tomorrow if available
+        if (forecastCount < 3 && forecastDays.size() > 1) {
+            JsonObject tomorrow = forecastDays[1];
+            if (tomorrow.containsKey("hour")) {
+                JsonArray tomorrowHours = tomorrow["hour"];
+                
+                for (int i = 0; i < tomorrowHours.size() && forecastCount < 3; i++) {
+                    JsonObject hour = tomorrowHours[i];
+                    String hourTime = hour["time"].as<String>();
+                    
+                    _weatherData.forecastTimes[forecastCount] = hourTime;
+                    _weatherData.forecastWindSpeed[forecastCount] = validateWindSpeed(hour["wind_kph"]);
+                    _weatherData.forecastWindDirection[forecastCount] = validateWindDirection(hour["wind_degree"]);
+                    _weatherData.forecastWindGust[forecastCount] = validateWindSpeed(hour["gust_kph"]);
+                    
+                    _logger.debug("Tomorrow forecast " + String(forecastCount) + ": " + hourTime + 
+                                 " - Wind: " + String(_weatherData.forecastWindSpeed[forecastCount], 1) + " km/h");
+                    
+                    forecastCount++;
+                }
+            }
         }
         
         xSemaphoreGive(_weatherDataMutex);
@@ -505,6 +543,32 @@ float WeatherPoller::validateWindDirection(float direction) {
     while (direction < 0) direction += 360;
     while (direction >= 360) direction -= 360;
     return direction;
+}
+
+int WeatherPoller::getCurrentHourFromTime(const String& timeStr) {
+    // Parse time string like "2024-01-15 17:30" to extract hour (17)
+    if (timeStr.length() == 0) {
+        return -1; // Invalid time
+    }
+    
+    int spaceIndex = timeStr.indexOf(' ');
+    if (spaceIndex == -1) {
+        return -1; // No space found
+    }
+    
+    String timePart = timeStr.substring(spaceIndex + 1); // "17:30"
+    int colonIndex = timePart.indexOf(':');
+    if (colonIndex == -1) {
+        return -1; // No colon found
+    }
+    
+    String hourStr = timePart.substring(0, colonIndex); // "17"
+    return hourStr.toInt();
+}
+
+int WeatherPoller::getHourFromTimeString(const String& timeStr) {
+    // Parse time string like "2024-01-15 18:00" to extract hour (18)
+    return getCurrentHourFromTime(timeStr);
 }
 
 String WeatherPoller::formatWeatherApiTime(const String& apiTime) {

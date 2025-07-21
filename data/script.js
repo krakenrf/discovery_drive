@@ -659,16 +659,21 @@ function formatWeatherTime(timeStr) {
   }
   
   try {
-    // Parse ISO 8601 datetime string and format for display
-    var date = new Date(timeStr);
-    if (isNaN(date.getTime())) {
-      return timeStr; // Return original if can't parse
+    // WeatherAPI returns time like "2024-01-15 14:30" (local time at location)
+    // Extract just the time part directly without timezone conversion
+    var spaceIndex = timeStr.indexOf(' ');
+    if (spaceIndex === -1) {
+      return timeStr; // Return original if format is unexpected
     }
     
-    // Format as HH:MM UTC
-    var hours = date.getUTCHours().toString().padStart(2, '0');
-    var minutes = date.getUTCMinutes().toString().padStart(2, '0');
-    return hours + ":" + minutes;
+    var timePart = timeStr.substring(spaceIndex + 1);
+    
+    // Validate time format (should be HH:MM)
+    if (timePart.length >= 5 && timePart.indexOf(':') !== -1) {
+      return timePart; // Return local time as-is
+    } else {
+      return timeStr; // Return original if can't parse
+    }
   } catch (e) {
     return timeStr; // Return original if any error
   }
