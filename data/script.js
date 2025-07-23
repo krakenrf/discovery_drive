@@ -80,6 +80,8 @@ setInterval(function() {
       // Wind safety status updates
       document.getElementById("windStowActive").innerHTML = data.windStowActive;
       document.getElementById("windStowReason").innerHTML = data.windStowReason;
+      document.getElementById("windTrackingActive").innerHTML = data.windTrackingActive;
+      document.getElementById("windTrackingStatus").innerHTML = data.windTrackingStatus;
       document.getElementById("windSafetyEnabled").innerHTML = data.windSafetyEnabled;
       document.getElementById("windBasedHomeEnabled").innerHTML = data.windBasedHomeEnabled;
       document.getElementById("windSpeedThreshold").innerHTML = data.windSpeedThreshold;

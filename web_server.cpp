@@ -730,6 +730,8 @@ void WebServerManager::setupAPIRoutes() {
         auto windSafetyData = weatherPoller.getWindSafetyData();
         doc["windStowActive"] = String(msc.isWindStowActive() ? "YES" : "NO");
         doc["windStowReason"] = msc.getWindStowReason();
+        doc["windTrackingActive"] = String(msc.isWindTrackingActive() ? "YES" : "NO");
+        doc["windTrackingStatus"] = msc.getWindTrackingStatus();
         doc["windSafetyEnabled"] = String(weatherPoller.isWindSafetyEnabled() ? "ON" : "OFF");
         doc["windBasedHomeEnabled"] = String(weatherPoller.isWindBasedHomeEnabled() ? "ON" : "OFF");
         doc["windSpeedThreshold"] = String(weatherPoller.getWindSpeedThreshold(), 1);

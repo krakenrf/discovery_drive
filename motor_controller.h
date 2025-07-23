@@ -96,6 +96,10 @@ public:
     void performWindStow();
     bool isMovementBlocked();
 
+    // Wind tracking methods
+    bool isWindTrackingActive();
+    String getWindTrackingStatus();
+
     // Utility methods
     int convertPercentageToSpeed(float percentage);
     int convertSpeedToPercentage(float speed);
@@ -117,6 +121,9 @@ public:
     
     // Wind stow state
     std::atomic<bool> _windStowActive = false;
+    
+    // Wind tracking state
+    std::atomic<bool> _windTrackingActive = false;
     
     // Fault and error flags
     std::atomic<bool> global_fault = false;
@@ -170,6 +177,10 @@ private:
     static constexpr float STALL_THRESHOLD = 0.01f;            // Minimum change rate (degrees/sec) to avoid stall fault
     static constexpr unsigned long CONVERGENCE_TIMEOUT = 3000; // ms to wait before checking for stalls
 
+    // Wind tracking constants
+    static constexpr unsigned long MANUAL_SETPOINT_TIMEOUT = 60000;      // 1 minute timeout for manual commands
+    static constexpr unsigned long WIND_TRACKING_UPDATE_INTERVAL = 10000; // 10 seconds between wind tracking updates
+
     // Control parameters (configurable)
     int P_el = 100;
     int P_az = 5;
@@ -215,6 +226,11 @@ private:
     float _windStowDirection = 0.0;
     unsigned long _lastWindStowUpdate = 0;
     static constexpr unsigned long WIND_STOW_UPDATE_INTERVAL = 5000; // 5 seconds
+    
+    // Wind tracking state
+    unsigned long _lastManualSetpointTime = 0;
+    unsigned long _lastWindTrackingUpdate = 0;
+    float _lastWindTrackingDirection = 0.0;
     
     // Oscillation detection
     unsigned long _oscillationTimerStart = 0;
@@ -271,6 +287,16 @@ private:
     void updateWindStowStatus();
     void setWindStowActive(bool active, const String& reason, float direction);
     bool shouldBlockMovement();
+    
+    // Wind tracking methods
+    void updateWindTrackingStatus();
+    void performWindTracking();
+    bool shouldActivateWindTracking();
+    void setWindTrackingActive(bool active);
+    
+    // Internal setpoint methods (bypass manual command tracking)
+    void setSetPointAzInternal(float setpoint_az);
+    void setSetPointElInternal(float setpoint_el);
     
     // Angle calculation methods
     void angle_shortest_error_az(float target_angle, float current_angle);

@@ -33,6 +33,9 @@ MotorSensorController::MotorSensorController(Preferences& prefs, INA219Manager& 
     _errorMutex = xSemaphoreCreateMutex();
     _el_startAngleMutex = xSemaphoreCreateMutex();
     _windStowMutex = xSemaphoreCreateMutex();
+    
+    // Initialize wind tracking
+    _lastManualSetpointTime = millis();
 }
 
 void MotorSensorController::begin() {
@@ -100,8 +103,11 @@ void MotorSensorController::begin() {
     setCorrectedAngleEl(correctAngle(getElStartAngle(), degAngleEl));
 
     // Set home position
-    setSetPointAz(0);
-    setSetPointEl(0);
+    setSetPointAzInternal(0);
+    setSetPointElInternal(0);
+    
+    // Initialize manual setpoint time
+    _lastManualSetpointTime = millis();
 }
 
 // =============================================================================
@@ -120,6 +126,9 @@ void MotorSensorController::setWeatherPoller(WeatherPoller* weatherPoller) {
 void MotorSensorController::runControlLoop() {
     // Update wind stow status first
     updateWindStowStatus();
+    
+    // Update wind tracking status
+    updateWindTrackingStatus();
     
     // Get current setpoints and update flags
     float current_setpoint_az = getSetPointAz();
@@ -258,8 +267,8 @@ void MotorSensorController::runSafetyLoop() {
         }
     }
 
-    // Emergency stop on fault (except in calibration mode and wind stow mode)
-    if (global_fault && !calMode && !_windStowActive) {
+    // Emergency stop on fault (except in calibration mode, wind stow mode, and wind tracking mode)
+    if (global_fault && !calMode && !_windStowActive && !_windTrackingActive) {
         setPWM(_pwm_pin_el, 255);
         setPWM(_pwm_pin_az, 255);
         errorText += "EMERGENCY ALL STOP. RESTART ESP32 TO CLEAR FAULTS.\n";
@@ -325,9 +334,9 @@ void MotorSensorController::performWindStow() {
         float stowAz = _windStowDirection;
         float stowEl = 0.0; // Lower elevation for wind safety
         
-        // Override normal setpoints for wind stow
-        setSetPointAz(stowAz);
-        setSetPointEl(stowEl);
+        // Override normal setpoints for wind stow (use internal methods to avoid manual tracking)
+        setSetPointAzInternal(stowAz);
+        setSetPointElInternal(stowEl);
         
         xSemaphoreGive(_windStowMutex);
     }
@@ -366,7 +375,127 @@ bool MotorSensorController::isMovementBlocked() {
 }
 
 // =============================================================================
-// MODIFIED SETPOINT METHODS TO HANDLE WIND STOW
+// WIND TRACKING METHODS
+// =============================================================================
+
+void MotorSensorController::updateWindTrackingStatus() {
+    if (_weatherPoller == nullptr) {
+        return;
+    }
+    
+    unsigned long currentTime = millis();
+    
+    // Update wind tracking at regular intervals
+    if (currentTime - _lastWindTrackingUpdate < WIND_TRACKING_UPDATE_INTERVAL) {
+        return;
+    }
+    _lastWindTrackingUpdate = currentTime;
+    
+    // Check if wind tracking should be active
+    if (shouldActivateWindTracking()) {
+        if (!_windTrackingActive) {
+            setWindTrackingActive(true);
+        }
+        performWindTracking();
+    } else {
+        if (_windTrackingActive) {
+            setWindTrackingActive(false);
+        }
+    }
+}
+
+bool MotorSensorController::shouldActivateWindTracking() {
+    // Don't activate wind tracking if:
+    // 1. Weather poller is not available
+    // 2. Wind-based home is not enabled
+    // 3. Emergency wind stow is active (takes priority)
+    // 4. Calibration mode is active
+    // 5. Recent manual setpoint command (within timeout)
+    // 6. Weather data is not valid
+    
+    if (_weatherPoller == nullptr) {
+        return false;
+    }
+    
+    if (!_weatherPoller->isWindBasedHomeEnabled()) {
+        return false;
+    }
+    
+    if (_windStowActive || calMode) {
+        return false;
+    }
+    
+    unsigned long currentTime = millis();
+    if (currentTime - _lastManualSetpointTime < MANUAL_SETPOINT_TIMEOUT) {
+        return false;
+    }
+    
+    if (!_weatherPoller->isDataValid()) {
+        return false;
+    }
+    
+    return true;
+}
+
+void MotorSensorController::setWindTrackingActive(bool active) {
+    bool wasActive = _windTrackingActive.load();
+    _windTrackingActive = active;
+    
+    if (active && !wasActive) {
+        _logger.info("Wind tracking activated - dish will follow optimal wind orientation");
+    } else if (!active && wasActive) {
+        _logger.info("Wind tracking deactivated");
+    }
+}
+
+void MotorSensorController::performWindTracking() {
+    if (!_windTrackingActive || _weatherPoller == nullptr) {
+        return;
+    }
+    
+    // Get current weather data
+    WeatherData weatherData = _weatherPoller->getWeatherData();
+    if (!weatherData.dataValid) {
+        return;
+    }
+    
+    // Calculate optimal direction based on current wind
+    float optimalDirection = _weatherPoller->calculateOptimalStowDirection(weatherData.currentWindDirection);
+    
+    // Only update if direction has changed significantly (avoid constant micro-adjustments)
+    float directionChange = abs(optimalDirection - _lastWindTrackingDirection);
+    if (directionChange > 5.0 || _lastWindTrackingDirection == 0.0) {  // 5-degree threshold
+        _logger.info("Wind tracking update - Current wind: " + String(weatherData.currentWindDirection, 1) + 
+                    "°, Optimal dish direction: " + String(optimalDirection, 1) + "°");
+        
+        // Update setpoints using internal methods to avoid triggering manual command tracking
+        setSetPointAzInternal(optimalDirection);
+        setSetPointElInternal(0.0);  // Keep elevation at 0 for wind tracking
+        
+        _lastWindTrackingDirection = optimalDirection;
+    }
+}
+
+bool MotorSensorController::isWindTrackingActive() {
+    return _windTrackingActive.load();
+}
+
+String MotorSensorController::getWindTrackingStatus() {
+    if (!_windTrackingActive) {
+        return "Inactive";
+    }
+    
+    if (_weatherPoller == nullptr || !_weatherPoller->isDataValid()) {
+        return "Active (No weather data)";
+    }
+    
+    WeatherData weatherData = _weatherPoller->getWeatherData();
+    return "Active - Wind: " + String(weatherData.currentWindDirection, 1) + 
+           "°, Target: " + String(_lastWindTrackingDirection, 1) + "°";
+}
+
+// =============================================================================
+// MODIFIED SETPOINT METHODS TO HANDLE WIND STOW AND TRACKING
 // =============================================================================
 
 void MotorSensorController::setSetPointAz(float value) {
@@ -376,11 +505,17 @@ void MotorSensorController::setSetPointAz(float value) {
         return;
     }
     
-    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
-        _setpoint_az = value;
-        _setPointAzUpdated = true;
-        xSemaphoreGive(_setPointMutex);
+    // Record manual setpoint command time (but not during wind tracking or wind stow)
+    if (!_windTrackingActive && !_windStowActive) {
+        _lastManualSetpointTime = millis();
+        
+        // Deactivate wind tracking when manual command is received
+        if (_windTrackingActive) {
+            setWindTrackingActive(false);
+        }
     }
+    
+    setSetPointAzInternal(value);
 }
 
 void MotorSensorController::setSetPointEl(float value) {
@@ -390,6 +525,28 @@ void MotorSensorController::setSetPointEl(float value) {
         return;
     }
     
+    // Record manual setpoint command time (but not during wind tracking or wind stow)
+    if (!_windTrackingActive && !_windStowActive) {
+        _lastManualSetpointTime = millis();
+        
+        // Deactivate wind tracking when manual command is received
+        if (_windTrackingActive) {
+            setWindTrackingActive(false);
+        }
+    }
+    
+    setSetPointElInternal(value);
+}
+
+void MotorSensorController::setSetPointAzInternal(float value) {
+    if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
+        _setpoint_az = value;
+        _setPointAzUpdated = true;
+        xSemaphoreGive(_setPointMutex);
+    }
+}
+
+void MotorSensorController::setSetPointElInternal(float value) {
     if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
         _setpoint_el = value;
         _setPointElUpdated = true;
@@ -745,7 +902,7 @@ void MotorSensorController::setPWM(int pin, int PWM) {
 }
 
 // =============================================================================
-// REMAINING METHODS (angle calculation, sensor reading, etc. - unchanged from original)
+// REMAINING METHODS (unchanged from original - angle calculation, sensor reading, etc.)
 // =============================================================================
 
 // =============================================================================
@@ -1273,7 +1430,7 @@ void MotorSensorController::handleOscillationDetection() {
                 float newSetpoint = (currentAngle <= 180.0) ? currentAngle - 1 : currentAngle + 1;
                 
                 _logger.warn("Excessive oscillation detected! Moving " + String((currentAngle <= 180.0) ? "-1°" : "+1°"));
-                setSetPointAz(newSetpoint);
+                setSetPointAzInternal(newSetpoint);
                 
                 _oscillationTimerActive = false;
                 _oscillationCount = 0;
