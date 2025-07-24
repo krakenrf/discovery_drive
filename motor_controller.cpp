@@ -236,28 +236,46 @@ void MotorSensorController::runSafetyLoop() {
         }
     }
 
-    // Check power consumption
-    float powerValue = ina219Manager.getPower();
-    if (powerValue > getMaxPowerBeforeFault()) overPowerFault = true;
+    // Skip power and voltage checks during emergency wind stow
+    if (!_windStowActive) {
+        // Check power consumption (only when NOT in emergency wind stow)
+        float powerValue = ina219Manager.getPower();
+        if (powerValue > getMaxPowerBeforeFault()) overPowerFault = true;
 
-    if (overPowerFault) {
-        global_fault = true;
-        errorText += "Power exceeded " + String(getMaxPowerBeforeFault()) + "W. Rotator may be stuck or jammed. Power: " + String(powerValue) + "W\n";
-        hasNewErrors = true;
+        if (overPowerFault) {
+            global_fault = true;
+            errorText += "Power exceeded " + String(getMaxPowerBeforeFault()) + "W. Rotator may be stuck or jammed. Power: " + String(powerValue) + "W\n";
+            hasNewErrors = true;
+        }
+
+        // Check voltage level (only when NOT in emergency wind stow)
+        float loadVoltageValue = ina219Manager.getLoadVoltage();
+        if (loadVoltageValue < getMinVoltageThreshold()) lowVoltageFault = true;
+
+        if (lowVoltageFault) {
+            global_fault = true;
+            errorText += "Voltage too low. Voltage: " + String(loadVoltageValue) + "V\n";
+            hasNewErrors = true;
+        }
+    } else {
+        // During emergency wind stow, log power consumption but don't fault
+        float powerValue = ina219Manager.getPower();
+        float loadVoltageValue = ina219Manager.getLoadVoltage();
+        
+        static unsigned long lastStowPowerLog = 0;
+        if (millis() - lastStowPowerLog > 2000) { // Log every 2 seconds during stow
+            _logger.info("EMERGENCY STOW - Power: " + String(powerValue, 1) + "W, Voltage: " + 
+                        String(loadVoltageValue, 1) + "V (safety limits bypassed)");
+            lastStowPowerLog = millis();
+        }
+        
+        // Reset power/voltage faults during emergency stow to allow movement
+        overPowerFault = false;
+        lowVoltageFault = false;
     }
 
-    // Check voltage level
-    float loadVoltageValue = ina219Manager.getLoadVoltage();
-    if (loadVoltageValue < getMinVoltageThreshold()) lowVoltageFault = true;
-
-    if (lowVoltageFault) {
-        global_fault = true;
-        errorText += "Voltage too low. Voltage: " + String(loadVoltageValue) + "V\n";
-        hasNewErrors = true;
-    }
-
-    // Check error convergence safety (only when not in calibration mode)
-    if (!calMode) {
+    // Check error convergence safety (only when not in calibration mode or emergency stow)
+    if (!calMode && !_windStowActive) {
         checkErrorConvergence();
         
         if (errorDivergenceFault) {
@@ -276,6 +294,7 @@ void MotorSensorController::runSafetyLoop() {
         slowPrint(errorText, 0);
     }
 }
+
 
 // =============================================================================
 // WIND SAFETY METHODS
@@ -314,10 +333,18 @@ void MotorSensorController::setWindStowActive(bool active, const String& reason,
         _windStowDirection = direction;
         
         if (active && !wasActive) {
-            _logger.warn("WIND STOW ACTIVATED: " + reason + 
+            _logger.warn("EMERGENCY WIND STOW ACTIVATED: " + reason + 
                        " - Moving to safe direction: " + String(direction, 1) + "°");
+            _logger.warn("POWER SAFETY OVERRIDES ENABLED - Power and voltage limits bypassed for emergency stow");
+            _logger.warn("Using emergency motor gains - AZ P=" + String(EMERGENCY_STOW_P_AZ) + 
+                       ", EL P=" + String(EMERGENCY_STOW_P_EL));
+            
+            // Clear any existing power/voltage faults to allow emergency movement
+            overPowerFault = false;
+            lowVoltageFault = false;
+            
         } else if (!active && wasActive) {
-            _logger.info("Wind stow deactivated - normal operation resumed");
+            _logger.info("Emergency wind stow deactivated - normal operation and safety limits resumed");
         }
         
         xSemaphoreGive(_windStowMutex);
@@ -385,55 +412,71 @@ void MotorSensorController::updateWindTrackingStatus() {
     
     unsigned long currentTime = millis();
     
-    // Update wind tracking at regular intervals
+    // Update wind tracking at regular intervals (every 10 seconds)
     if (currentTime - _lastWindTrackingUpdate < WIND_TRACKING_UPDATE_INTERVAL) {
         return;
     }
     _lastWindTrackingUpdate = currentTime;
     
     // Check if wind tracking should be active
-    if (shouldActivateWindTracking()) {
-        if (!_windTrackingActive) {
-            setWindTrackingActive(true);
-        }
+    bool shouldActivate = shouldActivateWindTracking();
+    
+    if (shouldActivate && !_windTrackingActive) {
+        _logger.info(">>> ACTIVATING wind tracking - 60 second timeout reached <<<");
+        setWindTrackingActive(true);
+        // Immediately perform wind tracking to move to current position
         performWindTracking();
-    } else {
-        if (_windTrackingActive) {
-            setWindTrackingActive(false);
-        }
+    } else if (!shouldActivate && _windTrackingActive) {
+        _logger.info(">>> DEACTIVATING wind tracking - conditions no longer met <<<");
+        setWindTrackingActive(false);
+    } else if (_windTrackingActive) {
+        // Continue normal wind tracking
+        performWindTracking();
     }
 }
 
 bool MotorSensorController::shouldActivateWindTracking() {
-    // Don't activate wind tracking if:
-    // 1. Weather poller is not available
-    // 2. Wind-based home is not enabled
-    // 3. Emergency wind stow is active (takes priority)
-    // 4. Calibration mode is active
-    // 5. Recent manual setpoint command (within timeout)
-    // 6. Weather data is not valid
-    
     if (_weatherPoller == nullptr) {
+        _logger.debug("Wind tracking blocked: No weather poller");
         return false;
     }
     
     if (!_weatherPoller->isWindBasedHomeEnabled()) {
+        _logger.debug("Wind tracking blocked: Wind-based home not enabled in settings");
         return false;
     }
     
-    if (_windStowActive || calMode) {
+    if (_windStowActive) {
+        _logger.debug("Wind tracking blocked: Emergency wind stow active");
+        return false;
+    }
+    
+    if (calMode) {
+        _logger.debug("Wind tracking blocked: Calibration mode active");
         return false;
     }
     
     unsigned long currentTime = millis();
-    if (currentTime - _lastManualSetpointTime < MANUAL_SETPOINT_TIMEOUT) {
+    unsigned long timeSinceManual = currentTime - _lastManualSetpointTime;
+    
+    if (timeSinceManual < MANUAL_SETPOINT_TIMEOUT) {
+        unsigned long remainingTime = MANUAL_SETPOINT_TIMEOUT - timeSinceManual;
+        _logger.debug("Wind tracking blocked: Manual timeout not reached (" + 
+                     String(timeSinceManual/1000) + "s elapsed, " + 
+                     String(remainingTime/1000) + "s remaining)");
         return false;
     }
     
     if (!_weatherPoller->isDataValid()) {
+        _logger.debug("Wind tracking blocked: Weather data not valid");
+        String error = _weatherPoller->getLastError();
+        if (error.length() > 0) {
+            _logger.debug("  Weather error: " + error);
+        }
         return false;
     }
     
+    _logger.debug("Wind tracking CAN activate - all conditions met");
     return true;
 }
 
@@ -442,9 +485,9 @@ void MotorSensorController::setWindTrackingActive(bool active) {
     _windTrackingActive = active;
     
     if (active && !wasActive) {
-        _logger.info("Wind tracking activated - dish will follow optimal wind orientation");
+        _logger.info("Wind tracking ACTIVATED - will move to current wind home position");
     } else if (!active && wasActive) {
-        _logger.info("Wind tracking deactivated");
+        _logger.info("Wind tracking DEACTIVATED");
     }
 }
 
@@ -456,23 +499,29 @@ void MotorSensorController::performWindTracking() {
     // Get current weather data
     WeatherData weatherData = _weatherPoller->getWeatherData();
     if (!weatherData.dataValid) {
+        _logger.debug("Wind tracking skipped: Weather data not valid");
         return;
     }
     
     // Calculate optimal direction based on current wind
     float optimalDirection = _weatherPoller->calculateOptimalStowDirection(weatherData.currentWindDirection);
     
-    // Only update if direction has changed significantly (avoid constant micro-adjustments)
-    float directionChange = abs(optimalDirection - _lastWindTrackingDirection);
-    if (directionChange > 5.0 || _lastWindTrackingDirection == 0.0) {  // 5-degree threshold
-        _logger.info("Wind tracking update - Current wind: " + String(weatherData.currentWindDirection, 1) + 
-                    "°, Optimal dish direction: " + String(optimalDirection, 1) + "°");
+    // Always move to the current optimal wind position (no threshold check)
+    if (optimalDirection != _lastWindTrackingDirection) {
+        float directionChange = abs(optimalDirection - _lastWindTrackingDirection);
+        
+        _logger.info("WIND TRACKING UPDATE");
+        _logger.info("  Current wind direction: " + String(weatherData.currentWindDirection, 1) + "°");
+        _logger.info("  Optimal dish direction: " + String(optimalDirection, 1) + "°");
+        _logger.info("  Previous dish direction: " + String(_lastWindTrackingDirection, 1) + "°");
+        _logger.info("  Direction change: " + String(directionChange, 1) + "°");
         
         // Update setpoints using internal methods to avoid triggering manual command tracking
         setSetPointAzInternal(optimalDirection);
         setSetPointElInternal(0.0);  // Keep elevation at 0 for wind tracking
         
         _lastWindTrackingDirection = optimalDirection;
+        _logger.info("  New setpoints: Az=" + String(optimalDirection, 1) + "°, El=0.0°");
     }
 }
 
@@ -505,14 +554,17 @@ void MotorSensorController::setSetPointAz(float value) {
         return;
     }
     
-    // Record manual setpoint command time (but not during wind tracking or wind stow)
-    if (!_windTrackingActive && !_windStowActive) {
-        _lastManualSetpointTime = millis();
-        
-        // Deactivate wind tracking when manual command is received
-        if (_windTrackingActive) {
-            setWindTrackingActive(false);
-        }
+    // Record manual setpoint command time and deactivate wind tracking
+    _lastManualSetpointTime = millis();
+    
+    _logger.info("MANUAL AZ command: " + String(value, 2) + "°");
+    if (_weatherPoller != nullptr && _weatherPoller->isWindBasedHomeEnabled()) {
+        _logger.info("  Wind home will activate in " + String(MANUAL_SETPOINT_TIMEOUT/1000) + " seconds");
+    }
+    
+    if (_windTrackingActive) {
+        _logger.info("  Deactivating wind tracking due to manual command");
+        setWindTrackingActive(false);
     }
     
     setSetPointAzInternal(value);
@@ -525,18 +577,22 @@ void MotorSensorController::setSetPointEl(float value) {
         return;
     }
     
-    // Record manual setpoint command time (but not during wind tracking or wind stow)
-    if (!_windTrackingActive && !_windStowActive) {
-        _lastManualSetpointTime = millis();
-        
-        // Deactivate wind tracking when manual command is received
-        if (_windTrackingActive) {
-            setWindTrackingActive(false);
-        }
+    // Record manual setpoint command time and deactivate wind tracking
+    _lastManualSetpointTime = millis();
+    
+    _logger.info("MANUAL EL command: " + String(value, 2) + "°");
+    if (_weatherPoller != nullptr && _weatherPoller->isWindBasedHomeEnabled()) {
+        _logger.info("  Wind home will activate in " + String(MANUAL_SETPOINT_TIMEOUT/1000) + " seconds");
+    }
+    
+    if (_windTrackingActive) {
+        _logger.info("  Deactivating wind tracking due to manual command");
+        setWindTrackingActive(false);
     }
     
     setSetPointElInternal(value);
 }
+
 
 void MotorSensorController::setSetPointAzInternal(float value) {
     if (_setPointMutex != NULL && xSemaphoreTake(_setPointMutex, portMAX_DELAY) == pdTRUE) {
@@ -739,7 +795,9 @@ void MotorSensorController::resetErrorTracker(ErrorTracker& tracker) {
 // =============================================================================
 
 void MotorSensorController::actuate_motor_az(int MIN_SPEED) {
-    double error = getErrorAz() * P_az;
+    // Use emergency high P gain during wind stow for maximum torque
+    int effectiveP_az = _windStowActive ? EMERGENCY_STOW_P_AZ : P_az;
+    double error = getErrorAz() * effectiveP_az;
 
     // Set direction based on error sign
     digitalWrite(_ccw_pin_az, (error >= 0) ? LOW : HIGH);
@@ -756,8 +814,9 @@ void MotorSensorController::actuate_motor_az(int MIN_SPEED) {
 
     // Control motor speed
     if (setPointState_az && !global_fault && !_isAzMotorLatched) {
-        // Gradual speed adjustment
-        const int speedDecrement = 10;
+        // During emergency stow, use more aggressive speed changes
+        int speedDecrement = _windStowActive ? 20 : 10;  // Faster speed ramp during stow
+        
         if (_current_speed_az > targetSpeed) {
             _current_speed_az = max(_current_speed_az - speedDecrement, targetSpeed);
         } else if (_current_speed_az < targetSpeed) {
@@ -765,16 +824,15 @@ void MotorSensorController::actuate_motor_az(int MIN_SPEED) {
         }
         setPWM(_pwm_pin_az, _current_speed_az);
 
-      if(_jitterAzMotors) {
-        _logger.info("Attempting recovery of stalled AZ motor with jitter");
-        setPWM(_pwm_pin_az, 0);
-        digitalWrite(_ccw_pin_az, (error >= 0) ? HIGH : LOW);  // Brief opposite direction
-        delayMicroseconds(150000);
-        digitalWrite(_ccw_pin_az, (error >= 0) ? LOW : HIGH);
-        delayMicroseconds(150000);
-        setPWM(_pwm_pin_az, _current_speed_az);
-      }
-
+        if(_jitterAzMotors) {
+            _logger.info("Attempting recovery of stalled AZ motor with jitter");
+            setPWM(_pwm_pin_az, 0);
+            digitalWrite(_ccw_pin_az, (error >= 0) ? HIGH : LOW);  // Brief opposite direction
+            delayMicroseconds(150000);
+            digitalWrite(_ccw_pin_az, (error >= 0) ? LOW : HIGH);
+            delayMicroseconds(150000);
+            setPWM(_pwm_pin_az, _current_speed_az);
+        }
     } else {
         // Stop motor
         setPWM(_pwm_pin_az, 255);
@@ -782,8 +840,11 @@ void MotorSensorController::actuate_motor_az(int MIN_SPEED) {
     }
 }
 
+
 void MotorSensorController::actuate_motor_el(int MIN_SPEED) {
-    double error = getErrorEl() * P_el;
+    // Use emergency high P gain during wind stow for maximum torque
+    int effectiveP_el = _windStowActive ? EMERGENCY_STOW_P_EL : P_el;
+    double error = getErrorEl() * effectiveP_el;
 
     // Set direction based on error sign
     digitalWrite(_ccw_pin_el, (error >= 0) ? LOW : HIGH);
@@ -800,8 +861,9 @@ void MotorSensorController::actuate_motor_el(int MIN_SPEED) {
 
     // Control motor speed
     if (setPointState_el && !global_fault && !_isElMotorLatched) {
-        // Gradual speed adjustment
-        const int speedDecrement = 10;
+        // During emergency stow, use more aggressive speed changes
+        int speedDecrement = _windStowActive ? 20 : 10;  // Faster speed ramp during stow
+        
         if (_current_speed_el > targetSpeed) {
             _current_speed_el = max(_current_speed_el - speedDecrement, targetSpeed);
         } else if (_current_speed_el < targetSpeed) {
@@ -809,16 +871,15 @@ void MotorSensorController::actuate_motor_el(int MIN_SPEED) {
         }
         setPWM(_pwm_pin_el, _current_speed_el);
 
-      if(_jitterElMotors) {
-        _logger.info("Attempting recovery of stalled EL motor with jitter");
-        setPWM(_pwm_pin_el, 0);
-        digitalWrite(_ccw_pin_el, (error >= 0) ? HIGH : LOW);  // Brief opposite direction
-        delayMicroseconds(150000);
-        digitalWrite(_ccw_pin_el, (error >= 0) ? LOW : HIGH);
-        delayMicroseconds(150000);
-        setPWM(_pwm_pin_el, _current_speed_el);
-      }
-
+        if(_jitterElMotors) {
+            _logger.info("Attempting recovery of stalled EL motor with jitter");
+            setPWM(_pwm_pin_el, 0);
+            digitalWrite(_ccw_pin_el, (error >= 0) ? HIGH : LOW);  // Brief opposite direction
+            delayMicroseconds(150000);
+            digitalWrite(_ccw_pin_el, (error >= 0) ? LOW : HIGH);
+            delayMicroseconds(150000);
+            setPWM(_pwm_pin_el, _current_speed_el);
+        }
     } else {
         // Stop motor
         setPWM(_pwm_pin_el, 255);

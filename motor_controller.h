@@ -181,6 +181,11 @@ private:
     static constexpr unsigned long MANUAL_SETPOINT_TIMEOUT = 60000;      // 1 minute timeout for manual commands
     static constexpr unsigned long WIND_TRACKING_UPDATE_INTERVAL = 10000; // 10 seconds between wind tracking updates
 
+    // Emergency stow motor control constants
+    static constexpr int EMERGENCY_STOW_P_AZ = 500;    // High P gain for max torque
+    static constexpr int EMERGENCY_STOW_P_EL = 1000;   // High P gain for max torque
+
+
     // Control parameters (configurable)
     int P_el = 100;
     int P_az = 5;
