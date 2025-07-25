@@ -67,6 +67,12 @@ public:
     int getMinVoltageThreshold();
     void setMinVoltageThreshold(int value);
 
+    // Angle offset methods (NEW)
+    float getAzOffset();
+    void setAzOffset(float offset);
+    float getElOffset();
+    void setElOffset(float offset);
+
     // Configuration parameter getters
     int getPEl() const { return P_el; }
     int getPAz() const { return P_az; }
@@ -194,6 +200,10 @@ private:
     std::atomic<int> _maxPowerBeforeFault = 10;
     std::atomic<int> _minVoltageThreshold = 6;
 
+    // Angle offset parameters (NEW)
+    float _az_offset = 0.0;
+    float _el_offset = 0.0;
+
     // Setpoints and errors (thread-safe)
     volatile float _setpoint_az = 0;
     volatile float _setpoint_el = 0;
@@ -279,6 +289,7 @@ private:
     SemaphoreHandle_t _errorMutex = NULL;
     SemaphoreHandle_t _el_startAngleMutex = NULL;
     SemaphoreHandle_t _windStowMutex = NULL;
+    SemaphoreHandle_t _offsetMutex = NULL;  // NEW: For thread-safe offset access
 
     // Motor control methods
     void actuate_motor_az(int min_speed);
@@ -326,6 +337,11 @@ private:
     
     // Utility methods
     void slowPrint(const String& message, int messageID);
+
+    // Helper methods for offset-adjusted start angles (NEW)
+    float getAdjustedAzStartAngle();
+    float getAdjustedElStartAngle();
+
 };
 
 #endif

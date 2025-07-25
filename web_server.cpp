@@ -587,6 +587,46 @@ void WebServerManager::setupConfigurationRoutes() {
         }
     });
 
+    server->on("/setAngleOffsets", HTTP_POST, [this]() {
+        bool updated = false;
+        
+        if (server->hasArg("azOffset")) {
+            String azOffsetStr = server->arg("azOffset");
+            azOffsetStr.trim();
+            if (azOffsetStr.length() > 0) {
+                float azOffset = azOffsetStr.toFloat();
+                if (azOffset >= -180.0 && azOffset <= 180.0) {
+                    msc.setAzOffset(azOffset);
+                    updated = true;
+                    _logger.info("AZ angle offset set to: " + String(azOffset, 3) + "° via web interface");
+                } else {
+                    _logger.warn("AZ offset out of range: " + String(azOffset, 3) + "°");
+                }
+            }
+        }
+        
+        if (server->hasArg("elOffset")) {
+            String elOffsetStr = server->arg("elOffset");
+            elOffsetStr.trim();
+            if (elOffsetStr.length() > 0) {
+                float elOffset = elOffsetStr.toFloat();
+                if (elOffset >= -45.0 && elOffset <= 45.0) {
+                    msc.setElOffset(elOffset);
+                    updated = true;
+                    _logger.info("EL angle offset set to: " + String(elOffset, 3) + "° via web interface");
+                } else {
+                    _logger.warn("EL offset out of range: " + String(elOffset, 3) + "°");
+                }
+            }
+        }
+        
+        if (updated) {
+            server->send(204); // Success, no content
+        } else {
+            server->send(400, "text/plain", "Invalid offset values or out of range");
+        }
+    });
+
 
 
 }
@@ -666,6 +706,8 @@ void WebServerManager::setupAPIRoutes() {
         doc["MIN_EL_TOLERANCE"] = String(msc.getMinElTolerance());
         doc["MAX_FAULT_POWER"] = String(msc.getMaxPowerBeforeFault());
         doc["MIN_VOLTAGE_THRESHOLD"] = String(msc.getMinVoltageThreshold());
+        doc["azOffset"] = String(msc.getAzOffset(), 3);
+        doc["elOffset"] = String(msc.getElOffset(), 3);
 
         // Power and connectivity data
         doc["inputVoltage"] = String(ina219Manager.getLoadVoltage());

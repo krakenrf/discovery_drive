@@ -278,6 +278,8 @@ void SerialManager::printStatusInfo() {
     Serial.println("Elevation Error: " + String(_motorSensorCtrl.getErrorEl(), 3) + "°");
     Serial.println("Elevation Tare Angle: " + String(_motorSensorCtrl.getElStartAngle(), 2) + "°");
     Serial.println("Needs Unwind: " + String(_motorSensorCtrl.needs_unwind));
+    Serial.println("Azimuth Angle Offset: " + String(_motorSensorCtrl.getAzOffset(), 3) + "°");
+    Serial.println("Elevation Angle Offset: " + String(_motorSensorCtrl.getElOffset(), 3) + "°");
     
     // === SYSTEM STATUS & ERRORS ===
     Serial.println("--- System Status & Errors ---");

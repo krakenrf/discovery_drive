@@ -33,6 +33,7 @@ MotorSensorController::MotorSensorController(Preferences& prefs, INA219Manager& 
     _errorMutex = xSemaphoreCreateMutex();
     _el_startAngleMutex = xSemaphoreCreateMutex();
     _windStowMutex = xSemaphoreCreateMutex();
+    _offsetMutex = xSemaphoreCreateMutex();
     
     // Initialize wind tracking
     _lastManualSetpointTime = millis();
@@ -48,6 +49,10 @@ void MotorSensorController::begin() {
     _MIN_EL_TOLERANCE = _preferences.getFloat("MIN_EL_TOL", 0.1);
     _maxPowerBeforeFault = _preferences.getInt("MAX_POWER", 10);
     _minVoltageThreshold = _preferences.getInt("MIN_VOLTAGE", 6);
+    _az_offset = _preferences.getFloat("az_offset", 0.0);
+    _el_offset = _preferences.getFloat("el_offset", 0.0);
+
+    _logger.info("Angle offsets loaded - AZ: " + String(_az_offset, 3) + "°, EL: " + String(_el_offset, 3) + "°");
 
     // Configure motor control pins
     pinMode(_pwm_pin_az, OUTPUT);
@@ -93,14 +98,15 @@ void MotorSensorController::begin() {
     // Initialize azimuth positioning
     float degAngleAz = getAvgAngle(_az_hall_i2c_addr);
     _az_startAngle = 10; // Avoid 0 to prevent backlash switching between 0 and 359
-    setCorrectedAngleAz(correctAngle(_az_startAngle, degAngleAz));
+    setCorrectedAngleAz(correctAngle(getAdjustedAzStartAngle(), degAngleAz));
     needs_unwind = _preferences.getInt("needs_unwind", 0);
 
     // Initialize elevation positioning
     float degAngleEl = getAvgAngle(_el_hall_i2c_addr);
     setElStartAngle(_preferences.getFloat("el_cal", degAngleEl));
+
     _logger.info("EL START ANGLE: " + String(getElStartAngle()));
-    setCorrectedAngleEl(correctAngle(getElStartAngle(), degAngleEl));
+    setCorrectedAngleEl(correctAngle(getAdjustedElStartAngle(), degAngleEl));
 
     // Set home position
     setSetPointAzInternal(0);
@@ -142,7 +148,7 @@ void MotorSensorController::runControlLoop() {
 
     // Read and process azimuth angle
     float degAngleAz = getAvgAngle(_az_hall_i2c_addr);
-    setCorrectedAngleAz(correctAngle(_az_startAngle, degAngleAz));
+    setCorrectedAngleAz(correctAngle(getAdjustedAzStartAngle(), degAngleAz));
     
     if (!calMode) {
         calcIfNeedsUnwind(getCorrectedAngleAz());
@@ -150,7 +156,7 @@ void MotorSensorController::runControlLoop() {
 
     // Read and process elevation angle
     float degAngleEl = getAvgAngle(_el_hall_i2c_addr);
-    setCorrectedAngleEl(correctAngle(getElStartAngle(), degAngleEl));
+    setCorrectedAngleEl(correctAngle(getAdjustedElStartAngle(), degAngleEl));
 
     // Calculate control errors
     angle_shortest_error_az(current_setpoint_az, getCorrectedAngleAz());
@@ -214,7 +220,7 @@ void MotorSensorController::runSafetyLoop() {
 
     // Check elevation bounds (if not in calibration mode)
     if (!calMode) {
-        if ((getCorrectedAngleEl() > 95 && getCorrectedAngleEl() < 355) || isnan(getCorrectedAngleEl())) {
+        if ((getCorrectedAngleEl() > 100 && getCorrectedAngleEl() < 350) || isnan(getCorrectedAngleEl())) {
             outOfBoundsFault = true;
         }
 
@@ -1406,6 +1412,69 @@ void MotorSensorController::setMinElTolerance(float value) {
         _preferences.putFloat("MIN_EL_TOL", value);
         _logger.info("MIN_EL_TOLERANCE set to: " + String(value));
     }
+}
+
+float MotorSensorController::getAzOffset() {
+    float result = 0.0;
+    if (_offsetMutex != NULL && xSemaphoreTake(_offsetMutex, portMAX_DELAY) == pdTRUE) {
+        result = _az_offset;
+        xSemaphoreGive(_offsetMutex);
+    }
+    return result;
+}
+
+void MotorSensorController::setAzOffset(float offset) {
+    // Validate offset range (±180 degrees should be sufficient)
+    if (offset < -180.0 || offset > 180.0) {
+        _logger.warn("AZ offset out of range: " + String(offset, 3) + "° (range: ±180°)");
+        return;
+    }
+    
+    if (_offsetMutex != NULL && xSemaphoreTake(_offsetMutex, portMAX_DELAY) == pdTRUE) {
+        _az_offset = offset;
+        _preferences.putFloat("az_offset", offset);
+        _setPointAzUpdated = true;
+        xSemaphoreGive(_offsetMutex);
+    }
+    
+    _logger.info("AZ angle offset set to: " + String(offset, 3) + "°");
+}
+
+float MotorSensorController::getElOffset() {
+    float result = 0.0;
+    if (_offsetMutex != NULL && xSemaphoreTake(_offsetMutex, portMAX_DELAY) == pdTRUE) {
+        result = _el_offset;
+        xSemaphoreGive(_offsetMutex);
+    }
+    return result;
+}
+
+void MotorSensorController::setElOffset(float offset) {
+    // Validate offset range (±5 degrees should be sufficient for elevation)
+    if (offset < -5.0 || offset > 5.0) {
+        _logger.warn("EL offset out of range: " + String(offset, 3) + "° (range: ±5°)");
+        return;
+    }
+    
+    if (_offsetMutex != NULL && xSemaphoreTake(_offsetMutex, portMAX_DELAY) == pdTRUE) {
+        _el_offset = offset;
+        _preferences.putFloat("el_offset", offset);
+        _setPointElUpdated = true;
+        xSemaphoreGive(_offsetMutex);
+    }
+    
+    _logger.info("EL angle offset set to: " + String(offset, 3) + "°");
+}
+
+// Helper methods to get offset-adjusted start angles
+float MotorSensorController::getAdjustedAzStartAngle() {
+    // Subtract offset from start angle (this adds offset to final corrected angle)
+    return _az_startAngle - getAzOffset();
+}
+
+float MotorSensorController::getAdjustedElStartAngle() {
+    // Subtract offset from start angle (this adds offset to final corrected angle) 
+    return getElStartAngle() - getElOffset();
 }
 
 // =============================================================================

@@ -88,6 +88,9 @@ setInterval(function() {
       document.getElementById("windGustThreshold").innerHTML = data.windGustThreshold;
       document.getElementById("emergencyStowActive").innerHTML = data.emergencyStowActive;
       document.getElementById("stowDirection").innerHTML = data.stowDirection;
+      
+      document.getElementById("azOffset").innerHTML = data.azOffset;
+      document.getElementById("elOffset").innerHTML = data.elOffset;
 
       // Update wind safety checkboxes
       var windSafetyCheckbox = document.getElementById("windSafetyToggle");
