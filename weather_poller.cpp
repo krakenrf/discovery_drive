@@ -148,8 +148,6 @@ bool WeatherPoller::shouldPollWeather() {
 }
 
 bool WeatherPoller::pollWeatherData() {
-    HTTPClient http;
-    
     String apiUrl = buildApiUrl();
     if (apiUrl.isEmpty()) {
         setErrorState("Failed to build API URL");
@@ -158,73 +156,119 @@ bool WeatherPoller::pollWeatherData() {
     
     _logger.debug("Polling weather API: " + apiUrl);
     
-    if (!http.begin(apiUrl)) {
-        setErrorState("HTTP begin failed");
-        return false;
-    }
-    
-    // Configure HTTP client
-    http.setConnectTimeout(HTTP_TIMEOUT_MS);
-    http.setTimeout(HTTP_TIMEOUT_MS);
-    http.addHeader("User-Agent", "DiscoveryDish/1.0");
-    http.addHeader("Connection", "close");  // Ensure connection is closed after request
-    http.setReuse(false);  // Don't reuse connections to avoid stale connection issues
-    
-    int httpResponseCode = http.GET();
+    // Use explicit scoping to ensure HTTPClient is properly destroyed
     bool success = false;
+    {
+        HTTPClient http;
+        
+        if (!http.begin(apiUrl)) {
+            setErrorState("HTTP begin failed");
+            return false;
+        }
+        
+        // Configure HTTP client with explicit connection management
+        http.setConnectTimeout(HTTP_TIMEOUT_MS);
+        http.setTimeout(HTTP_TIMEOUT_MS);
+        http.addHeader("User-Agent", "DiscoveryDish/1.0");
+        http.addHeader("Connection", "close");  // Force connection close
+        http.setReuse(false);  // Disable connection reuse to prevent stale connections
+        
+        int httpResponseCode = http.GET();
+        
+        if (httpResponseCode == 200) {
+            String payload = http.getString();
+            success = processWeatherResponse(payload);
+            // Clear payload immediately after use
+            payload = String();
+        } else if (httpResponseCode == 401) {
+            setErrorState("Invalid API key");
+            _logger.error("WeatherAPI authentication failed - check API key");
+        } else if (httpResponseCode == 403) {
+            setErrorState("API key quota exceeded");
+            _logger.error("WeatherAPI quota exceeded");
+        } else if (httpResponseCode > 0) {
+            setErrorState("HTTP error: " + String(httpResponseCode));
+            _logger.error("WeatherAPI HTTP error: " + String(httpResponseCode));
+        } else {
+            setErrorState("Network error: " + String(httpResponseCode));
+            _logger.error("WeatherAPI network error: " + String(httpResponseCode));
+        }
+        
+        // Explicitly end the HTTP connection
+        http.end();
+        
+    } // HTTPClient object destroyed here - forces cleanup
     
-    if (httpResponseCode == 200) {
-        String payload = http.getString();
-        success = processWeatherResponse(payload);
-    } else if (httpResponseCode == 401) {
-        setErrorState("Invalid API key");
-        _logger.error("WeatherAPI authentication failed - check API key");
-    } else if (httpResponseCode == 403) {
-        setErrorState("API key quota exceeded");
-        _logger.error("WeatherAPI quota exceeded");
-    } else if (httpResponseCode > 0) {
-        setErrorState("HTTP error: " + String(httpResponseCode));
-        _logger.error("WeatherAPI HTTP error: " + String(httpResponseCode));
-    } else {
-        setErrorState("Network error: " + String(httpResponseCode));
-        _logger.error("WeatherAPI network error: " + String(httpResponseCode));
+    // Force string pool cleanup if memory is low
+    if (ESP.getFreeHeap() < 50000) {
+        // Force string cleanup by creating and destroying temporary strings
+        String temp = "";
+        temp.reserve(0);
     }
     
-    http.end();
     return success;
 }
 
 bool WeatherPoller::processWeatherResponse(const String& payload) {
-    DynamicJsonDocument doc(4096);
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (error) {
-        setErrorState("JSON parse error: " + String(error.c_str()));
-        return false;
-    }
-    
-    // Check for API errors
-    if (doc.containsKey("error")) {
-        String apiError = doc["reason"].as<String>();
-        setErrorState("API error: " + apiError);
-        return false;
-    }
-    
-    // Extract current and forecast weather data
-    bool currentOk = extractCurrentWeather(doc);
-    bool forecastOk = extractForecastWeather(doc);
-    
-    if (currentOk || forecastOk) {
-        if (_weatherDataMutex != NULL && xSemaphoreTake(_weatherDataMutex, portMAX_DELAY) == pdTRUE) {
-            _weatherData.dataValid = true;
-            _weatherData.errorMessage = "";
-            xSemaphoreGive(_weatherDataMutex);
+    // Use explicit scoping for JSON document to ensure proper cleanup
+    bool success = false;
+    {
+        // Use appropriate document size - increased slightly for safety
+        DynamicJsonDocument doc(5120);  // 5KB should handle most responses
+        
+        DeserializationError error = deserializeJson(doc, payload);
+        
+        if (error) {
+            String errorMsg = "JSON parse error: " + String(error.c_str());
+            
+            // Add more detailed error information for debugging
+            if (error == DeserializationError::IncompleteInput) {
+                errorMsg += " (Response appears truncated - received " + 
+                           String(payload.length()) + " bytes)";
+            } else if (error == DeserializationError::NoMemory) {
+                errorMsg += " (Insufficient memory for JSON parsing - need ~" + 
+                           String(payload.length() * 1.5) + " bytes)";
+            }
+            
+            setErrorState(errorMsg);
+            
+            // Clear document before returning
+            doc.clear();
+            return false;
         }
-        return true;
-    } else {
-        setErrorState("Failed to extract weather data");
-        return false;
-    }
+        
+        // Check for API errors
+        if (doc.containsKey("error")) {
+            String apiError = doc["error"]["message"].as<String>();
+            setErrorState("API error: " + apiError);
+            
+            // Clear document before returning
+            doc.clear();
+            return false;
+        }
+        
+        // Extract current and forecast weather data
+        bool currentOk = extractCurrentWeather(doc);
+        bool forecastOk = extractForecastWeather(doc);
+        
+        if (currentOk || forecastOk) {
+            if (_weatherDataMutex != NULL && xSemaphoreTake(_weatherDataMutex, portMAX_DELAY) == pdTRUE) {
+                _weatherData.dataValid = true;
+                _weatherData.errorMessage = "";
+                xSemaphoreGive(_weatherDataMutex);
+            }
+            success = true;
+        } else {
+            setErrorState("Failed to extract weather data");
+            success = false;
+        }
+        
+        // Explicitly clear the JSON document to free memory immediately
+        doc.clear();
+        
+    } // DynamicJsonDocument destroyed here
+    
+    return success;
 }
 
 // =============================================================================
@@ -422,7 +466,7 @@ bool WeatherPoller::isWindBasedHomeEnabled() {
 }
 
 // =============================================================================
-// DATA PROCESSING HELPERS (unchanged from original)
+// DATA PROCESSING HELPERS
 // =============================================================================
 
 bool WeatherPoller::extractCurrentWeather(JsonDocument& doc) {
@@ -438,10 +482,16 @@ bool WeatherPoller::extractCurrentWeather(JsonDocument& doc) {
         _weatherData.currentWindSpeed = validateWindSpeed(current["wind_kph"]);
         _weatherData.currentWindDirection = validateWindDirection(current["wind_degree"]);
         _weatherData.currentWindGust = validateWindSpeed(current["gust_kph"]);
-        _weatherData.currentTime = current["last_updated"].as<String>();
         
-        // Use WeatherAPI's last_updated timestamp for our "Last Update" field too
-        _weatherData.lastUpdateTime = formatWeatherApiTime(current["last_updated"].as<String>());
+        // Handle time strings carefully to avoid memory leaks
+        const char* timeStr = current["last_updated"];
+        if (timeStr != nullptr) {
+            _weatherData.currentTime = String(timeStr);
+            _weatherData.lastUpdateTime = formatWeatherApiTime(_weatherData.currentTime);
+        } else {
+            _weatherData.currentTime = "Unknown";
+            _weatherData.lastUpdateTime = "Unknown";
+        }
         
         xSemaphoreGive(_weatherDataMutex);
         
@@ -481,7 +531,10 @@ bool WeatherPoller::extractForecastWeather(JsonDocument& doc) {
     // Get current time from the API response to find our position
     String currentTimeStr = "";
     if (doc.containsKey("current") && doc["current"].containsKey("last_updated")) {
-        currentTimeStr = doc["current"]["last_updated"].as<String>();
+        const char* timeStr = doc["current"]["last_updated"];
+        if (timeStr != nullptr) {
+            currentTimeStr = String(timeStr);
+        }
     }
     
     if (_weatherDataMutex != NULL && xSemaphoreTake(_weatherDataMutex, portMAX_DELAY) == pdTRUE) {
@@ -491,9 +544,13 @@ bool WeatherPoller::extractForecastWeather(JsonDocument& doc) {
         _logger.debug("Current time: " + currentTimeStr + ", current hour: " + String(currentHour) + ", looking for hours > " + String(currentHour));
         
         // Find the next available hours starting from current hour + 1
-        for (int i = 0; i < hours.size() && forecastCount < 3; i++) {
+        for (size_t i = 0; i < hours.size() && forecastCount < 3; i++) {
             JsonObject hour = hours[i];
-            String hourTime = hour["time"].as<String>();
+            
+            const char* hourTimeStr = hour["time"];
+            if (hourTimeStr == nullptr) continue;
+            
+            String hourTime = String(hourTimeStr);
             int hourValue = getHourFromTimeString(hourTime);
             
             // Only include hours that are in the future (current hour + 1 or later)
@@ -517,9 +574,13 @@ bool WeatherPoller::extractForecastWeather(JsonDocument& doc) {
             if (tomorrow.containsKey("hour")) {
                 JsonArray tomorrowHours = tomorrow["hour"];
                 
-                for (int i = 0; i < tomorrowHours.size() && forecastCount < 3; i++) {
+                for (size_t i = 0; i < tomorrowHours.size() && forecastCount < 3; i++) {
                     JsonObject hour = tomorrowHours[i];
-                    String hourTime = hour["time"].as<String>();
+                    
+                    const char* hourTimeStr = hour["time"];
+                    if (hourTimeStr == nullptr) continue;
+                    
+                    String hourTime = String(hourTimeStr);
                     
                     _weatherData.forecastTimes[forecastCount] = hourTime;
                     _weatherData.forecastWindSpeed[forecastCount] = validateWindSpeed(hour["wind_kph"]);
@@ -545,8 +606,23 @@ bool WeatherPoller::extractForecastWeather(JsonDocument& doc) {
 
 void WeatherPoller::clearWeatherData() {
     if (_weatherDataMutex != NULL && xSemaphoreTake(_weatherDataMutex, portMAX_DELAY) == pdTRUE) {
-        _weatherData = WeatherData(); // Reset to default values
-        _weatherData.lastUpdateTime = "Never"; // Set appropriate default
+        // Clear all data and explicitly reset strings to free memory
+        _weatherData.currentWindSpeed = 0.0;
+        _weatherData.currentWindGust = 0.0;
+        _weatherData.currentWindDirection = 0.0;
+        _weatherData.currentTime = "";
+        _weatherData.lastUpdateTime = "Never";
+        _weatherData.errorMessage = "";
+        _weatherData.dataValid = false;
+        
+        // Clear forecast arrays
+        for (int i = 0; i < 3; i++) {
+            _weatherData.forecastWindSpeed[i] = 0.0;
+            _weatherData.forecastWindGust[i] = 0.0;
+            _weatherData.forecastWindDirection[i] = 0.0;
+            _weatherData.forecastTimes[i] = "";
+        }
+        
         xSemaphoreGive(_weatherDataMutex);
     }
 }
@@ -561,7 +637,7 @@ void WeatherPoller::setErrorState(const String& error) {
 }
 
 // =============================================================================
-// CONFIGURATION METHODS (unchanged from original)
+// CONFIGURATION METHODS
 // =============================================================================
 
 bool WeatherPoller::setLocation(float latitude, float longitude) {
@@ -649,7 +725,7 @@ bool WeatherPoller::isFullyConfigured() {
 }
 
 // =============================================================================
-// DATA ACCESS METHODS (unchanged from original)
+// DATA ACCESS METHODS
 // =============================================================================
 
 WeatherData WeatherPoller::getWeatherData() {
@@ -690,7 +766,7 @@ unsigned long WeatherPoller::getLastUpdateTime() {
 }
 
 // =============================================================================
-// CONTROL METHODS (unchanged from original)
+// CONTROL METHODS
 // =============================================================================
 
 void WeatherPoller::forceUpdate() {
@@ -714,7 +790,7 @@ void WeatherPoller::setPollingEnabled(bool enabled) {
 }
 
 // =============================================================================
-// UTILITY METHODS (unchanged from original)
+// UTILITY METHODS
 // =============================================================================
 
 String WeatherPoller::buildApiUrl() {
