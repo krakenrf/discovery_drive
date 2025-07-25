@@ -425,15 +425,18 @@ void MotorSensorController::updateWindTrackingStatus() {
         _logger.info(">>> ACTIVATING wind tracking - 60 second timeout reached <<<");
         setWindTrackingActive(true);
         // Immediately perform wind tracking to move to current position
+        _logger.debug("Calling performWindTracking() immediately after activation");
         performWindTracking();
     } else if (!shouldActivate && _windTrackingActive) {
         _logger.info(">>> DEACTIVATING wind tracking - conditions no longer met <<<");
         setWindTrackingActive(false);
     } else if (_windTrackingActive) {
         // Continue normal wind tracking
+        _logger.debug("Continuing wind tracking (already active)");
         performWindTracking();
     }
 }
+
 
 bool MotorSensorController::shouldActivateWindTracking() {
     if (_weatherPoller == nullptr) {
@@ -485,7 +488,10 @@ void MotorSensorController::setWindTrackingActive(bool active) {
     _windTrackingActive = active;
     
     if (active && !wasActive) {
+        // Reset the last direction to force movement on first activation
+        _lastWindTrackingDirection = -999.0;  // Invalid direction to force first update
         _logger.info("Wind tracking ACTIVATED - will move to current wind home position");
+        _logger.debug("Reset last wind direction to force initial movement");
     } else if (!active && wasActive) {
         _logger.info("Wind tracking DEACTIVATED");
     }
@@ -506,15 +512,22 @@ void MotorSensorController::performWindTracking() {
     // Calculate optimal direction based on current wind
     float optimalDirection = _weatherPoller->calculateOptimalStowDirection(weatherData.currentWindDirection);
     
+    _logger.debug("Wind tracking check - Current wind: " + String(weatherData.currentWindDirection, 1) + 
+                 "°, Optimal: " + String(optimalDirection, 1) + 
+                 "°, Last: " + String(_lastWindTrackingDirection, 1) + "°");
+    
     // Always move to the current optimal wind position (no threshold check)
     if (optimalDirection != _lastWindTrackingDirection) {
         float directionChange = abs(optimalDirection - _lastWindTrackingDirection);
         
-        _logger.info("WIND TRACKING UPDATE");
+        String reason = (_lastWindTrackingDirection == -999.0) ? 
+            "INITIAL wind home positioning" : 
+            "Wind direction change (" + String(directionChange, 1) + "°)";
+        
+        _logger.info("WIND TRACKING UPDATE - " + reason);
         _logger.info("  Current wind direction: " + String(weatherData.currentWindDirection, 1) + "°");
         _logger.info("  Optimal dish direction: " + String(optimalDirection, 1) + "°");
         _logger.info("  Previous dish direction: " + String(_lastWindTrackingDirection, 1) + "°");
-        _logger.info("  Direction change: " + String(directionChange, 1) + "°");
         
         // Update setpoints using internal methods to avoid triggering manual command tracking
         setSetPointAzInternal(optimalDirection);
@@ -522,6 +535,9 @@ void MotorSensorController::performWindTracking() {
         
         _lastWindTrackingDirection = optimalDirection;
         _logger.info("  New setpoints: Az=" + String(optimalDirection, 1) + "°, El=0.0°");
+        
+    } else {
+        _logger.debug("Wind tracking: No movement needed (direction unchanged)");
     }
 }
 

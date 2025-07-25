@@ -167,6 +167,8 @@ bool WeatherPoller::pollWeatherData() {
     http.setConnectTimeout(HTTP_TIMEOUT_MS);
     http.setTimeout(HTTP_TIMEOUT_MS);
     http.addHeader("User-Agent", "DiscoveryDish/1.0");
+    http.addHeader("Connection", "close");  // Ensure connection is closed after request
+    http.setReuse(false);  // Don't reuse connections to avoid stale connection issues
     
     int httpResponseCode = http.GET();
     bool success = false;
