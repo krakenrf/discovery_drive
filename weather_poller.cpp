@@ -39,9 +39,9 @@ void WeatherPoller::begin() {
     _apiKey = _preferences.getString("weather_api_key", "");
     
     // Load wind safety configuration
-    _windSafetyEnabled = _preferences.getBool("wind_safety_enabled", false);
-    _windSpeedThreshold = _preferences.getFloat("wind_speed_threshold", 50.0);
-    _windGustThreshold = _preferences.getFloat("wind_gust_threshold", 60.0);
+    _windSafetyEnabled = _preferences.getBool("wind_safety_en", false);
+    _windSpeedThreshold = _preferences.getFloat("wind_speed_thr", 50.0);
+    _windGustThreshold = _preferences.getFloat("wind_gust_thr", 60.0);
     _windBasedHomeEnabled = _preferences.getBool("wind_based_home", false);
     
     // Initialize weather data
@@ -419,7 +419,7 @@ bool WeatherPoller::shouldActivateEmergencyStow() {
 
 void WeatherPoller::setWindSafetyEnabled(bool enabled) {
     _windSafetyEnabled = enabled;
-    _preferences.putBool("wind_safety_enabled", enabled);
+    _preferences.putBool("wind_safety_en", enabled);
     _logger.info("Wind safety " + String(enabled ? "enabled" : "disabled"));
     
     if (!enabled) {
@@ -434,7 +434,7 @@ bool WeatherPoller::isWindSafetyEnabled() {
 void WeatherPoller::setWindSpeedThreshold(float threshold) {
     if (threshold > 0 && threshold <= 200) {
         _windSpeedThreshold = threshold;
-        _preferences.putFloat("wind_speed_threshold", threshold);
+        _preferences.putFloat("wind_speed_thr", threshold);
         _logger.info("Wind speed threshold set to: " + String(threshold, 1) + " km/h");
     }
 }
@@ -446,7 +446,7 @@ float WeatherPoller::getWindSpeedThreshold() {
 void WeatherPoller::setWindGustThreshold(float threshold) {
     if (threshold > 0 && threshold <= 200) {
         _windGustThreshold = threshold;
-        _preferences.putFloat("wind_gust_threshold", threshold);
+        _preferences.putFloat("wind_gust_thr", threshold);
         _logger.info("Wind gust threshold set to: " + String(threshold, 1) + " km/h");
     }
 }

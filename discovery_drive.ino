@@ -186,7 +186,7 @@ void setup() {
 void ReadPowerSensor(void *pvParameters) {
   // Initialize the last wake time to the current tick count
   TickType_t xLastWakeTime = xTaskGetTickCount();
-  const TickType_t xFrequency = 500 / portTICK_PERIOD_MS;
+  const TickType_t xFrequency = 100 / portTICK_PERIOD_MS;
 
   for(;;) {
     ina219Manager.ReadData();

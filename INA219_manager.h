@@ -45,7 +45,7 @@ private:
 
     // Hardware configuration
     static constexpr int _INA219_I2C_ADDRESS = 0x45;
-    static constexpr int _VOLTAGE_ARRAY_SIZE = 10;
+    static constexpr int _AVERAGING_ARRAY_SIZE = 10;
 
     // Thread synchronization
     SemaphoreHandle_t powerMutex = NULL;
@@ -56,10 +56,16 @@ private:
     float _power = 0;
 
     // Voltage averaging
-    float _voltageReadings[_VOLTAGE_ARRAY_SIZE];
+    float _voltageReadings[_AVERAGING_ARRAY_SIZE];
     int _voltageIndex = 0;
     int _voltageCount = 0;
     float _averagedVoltage = 0;
+
+    // Current averaging
+    float _currentReadings[_AVERAGING_ARRAY_SIZE];
+    int _currentIndex = 0;
+    int _currentCount = 0;
+    float _averagedCurrent = 0;
 
     // Hardware interface
     Adafruit_INA219 _ina219;
@@ -67,6 +73,8 @@ private:
     // Private helper methods
     void updateVoltageAverage(float newVoltage);
     float calculateVoltageAverage();
+    void updateCurrentAverage(float newCurrent);
+    float calculateCurrentAverage();
 };
 
 #endif // INA219_MANAGER_H
