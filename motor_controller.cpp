@@ -172,14 +172,7 @@ void MotorSensorController::runControlLoop() {
     if (!calMode) {
         updateMotorControl(current_setpoint_az, current_setpoint_el, setPointAzUpdated, setPointElUpdated);
         updateMotorPriority(setPointAzUpdated, setPointElUpdated);
-        
-        // Apply wind stow movement blocking
-        if (shouldBlockMovement()) {
-            // Override motor states to stop movement
-            setPointState_az = false;
-            setPointState_el = false;
-        }
-        
+                
         actuate_motor_az(MIN_AZ_SPEED);
         actuate_motor_el(MIN_EL_SPEED);
     } else {
@@ -375,12 +368,6 @@ void MotorSensorController::performWindStow() {
     }
 }
 
-bool MotorSensorController::shouldBlockMovement() {
-    // Block external movement commands when in wind stow mode
-    // Allow internal wind stow movements to continue
-    return _windStowActive && !calMode;
-}
-
 bool MotorSensorController::isWindStowActive() {
     return _windStowActive.load();
 }
@@ -401,10 +388,6 @@ float MotorSensorController::getWindStowDirection() {
         xSemaphoreGive(_windStowMutex);
     }
     return direction;
-}
-
-bool MotorSensorController::isMovementBlocked() {
-    return shouldBlockMovement();
 }
 
 // =============================================================================
