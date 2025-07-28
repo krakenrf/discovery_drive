@@ -645,7 +645,7 @@ void WebServerManager::setupAPIRoutes() {
     });
 
     server->on("/variable", HTTP_GET, [this]() {
-        static DynamicJsonDocument doc(2048);
+        static DynamicJsonDocument doc(8192);
         doc.clear();
 
         // Motor and control data

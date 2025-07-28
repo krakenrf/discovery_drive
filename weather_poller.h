@@ -47,10 +47,9 @@ struct WeatherData {
 
 struct WindSafetyData {
     bool emergencyStowActive = false;
-    bool forecastStowActive = false;
-    float currentStowDirection = 0.0;  // Current safe stow azimuth
-    String stowReason = "";           // Why stow is active
-    unsigned long stowActivatedTime = 0;
+    bool forecastStowActive = false;  // Keep this if you use it elsewhere
+    float currentStowDirection = 0.0;
+    String stowReason = "";
 };
 
 class WeatherPoller {
@@ -116,10 +115,9 @@ private:
     std::atomic<bool> _windBasedHomeEnabled{false};
     
     // Timing constants
-    static constexpr unsigned long POLL_INTERVAL_MS = 900000; // 15 minutes
+    static constexpr unsigned long POLL_INTERVAL_MS = 300000; // 5 minutes
     static constexpr unsigned long RETRY_INTERVAL_MS = 300000; // 5 minutes on error
     static constexpr unsigned long HTTP_TIMEOUT_MS = 15000;    // 15 seconds
-    static constexpr unsigned long STOW_HYSTERESIS_MS = 300000; // 5 minutes before clearing stow
     
     // State variables
     std::atomic<unsigned long> _lastPollTime{0};

@@ -301,16 +301,11 @@ void WeatherPoller::updateWindSafetyStatus() {
         
         setEmergencyStowState(true, reason);
     } else {
-        // Check if we should clear the stow state (with hysteresis)
-        if (_windSafetyMutex != NULL && xSemaphoreTake(_windSafetyMutex, portMAX_DELAY) == pdTRUE) {
-            if (_windSafetyData.emergencyStowActive && 
-                (millis() - _windSafetyData.stowActivatedTime) > STOW_HYSTERESIS_MS) {
-                setEmergencyStowState(false, "");
-            }
-            xSemaphoreGive(_windSafetyMutex);
-        }
+        // SIMPLIFIED: No hysteresis - deactivate immediately when conditions improve
+        setEmergencyStowState(false, "");
     }
 }
+
 
 bool WeatherPoller::checkCurrentWindConditions() {
     WeatherData data = getWeatherData();
@@ -356,8 +351,6 @@ void WeatherPoller::setEmergencyStowState(bool active, const String& reason) {
         _windSafetyData.stowReason = reason;
         
         if (active) {
-            _windSafetyData.stowActivatedTime = millis();
-            
             // Calculate optimal stow direction based on current wind
             WeatherData data = getWeatherData();
             _windSafetyData.currentStowDirection = calculateOptimalStowDirection(data.currentWindDirection);
@@ -376,6 +369,7 @@ void WeatherPoller::setEmergencyStowState(bool active, const String& reason) {
         xSemaphoreGive(_windSafetyMutex);
     }
 }
+
 
 float WeatherPoller::calculateOptimalStowDirection(float windDirection) {
     // Position dish edge-on to wind for minimum wind load

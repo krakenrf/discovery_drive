@@ -107,7 +107,7 @@ void setup() {
   xTaskCreatePinnedToCore(
     HandleWebRequests
     ,  "Web Server Task"
-    ,  16384  // Stack size may need adjustment
+    ,  20480  // Stack size may need adjustment
     ,  NULL
     ,  1  // Priority (lower than LWIP tasks)
     ,  NULL
@@ -144,7 +144,7 @@ void setup() {
   xTaskCreatePinnedToCore(
     PollWeather
     ,  "Poll Weather API" // A name just for humans
-    ,  4096        // The stack size can be checked by calling `uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);`
+    ,  8192        // The stack size can be checked by calling `uxHighWaterMark = uxTaskGetStackHighWaterMark(NULL);`
     ,  NULL // Task parameter which can modify the task behavior. This must be passed as pointer to void.
     ,  1  // Priority
     ,  NULL // Task handle is not used here - simply pass NULL
