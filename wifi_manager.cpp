@@ -46,6 +46,8 @@ void WiFiManager::begin() {
 void WiFiManager::connectToWiFi() {
     safeCopy(wifi_ssid, _preferences.getString("wifi_ssid", "").c_str(), sizeof(wifi_ssid));
     safeCopy(wifi_password, _preferences.getString("wifi_password", "").c_str(), sizeof(wifi_password));
+    _wifiChannelLock = _preferences.getInt("wifi_chan_lock", 0);
+    if (_wifiChannelLock < 0 || _wifiChannelLock > 13) _wifiChannelLock = 0;
 
     // Initialize ESP-IDF networking stack
     ESP_ERROR_CHECK(esp_netif_init());
@@ -94,13 +96,25 @@ void WiFiManager::connectToWiFi() {
         
         // Roaming and scanning configuration
         wifi_config.sta.bssid_set = 0;
-        wifi_config.sta.rm_enabled = 1;    // 802.11k
-        wifi_config.sta.btm_enabled = 1;   // 802.11v
-        wifi_config.sta.ft_enabled = 1;    // 802.11r
-        wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
         wifi_config.sta.listen_interval = 3;
         wifi_config.sta.sort_method = WIFI_CONNECT_AP_BY_SIGNAL;
-        
+
+        if (_wifiChannelLock >= 1 && _wifiChannelLock <= 13) {
+            // Channel lock (CE/EMC testing): prefer the locked channel and
+            // disable 802.11k/v/r roaming so the radio stays on it
+            wifi_config.sta.channel = _wifiChannelLock;
+            wifi_config.sta.scan_method = WIFI_FAST_SCAN;
+            wifi_config.sta.rm_enabled = 0;
+            wifi_config.sta.btm_enabled = 0;
+            wifi_config.sta.ft_enabled = 0;
+            _logger.info("WiFi channel locked to " + String(_wifiChannelLock) + " (roaming disabled)");
+        } else {
+            wifi_config.sta.rm_enabled = 1;    // 802.11k
+            wifi_config.sta.btm_enabled = 1;   // 802.11v
+            wifi_config.sta.ft_enabled = 1;    // 802.11r
+            wifi_config.sta.scan_method = WIFI_ALL_CHANNEL_SCAN;
+        }
+
         ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
         ESP_ERROR_CHECK(esp_wifi_start());
 
@@ -114,7 +128,9 @@ void WiFiManager::connectToWiFi() {
         // Enable proactive roaming: ESP-IDF fires WIFI_EVENT_STA_BSS_RSSI_LOW
         // when signal drops below this threshold, letting us scan for a better AP
         // before the current one becomes unreachable
-        esp_wifi_set_rssi_threshold(ROAMING_RSSI_THRESHOLD);
+        if (_wifiChannelLock == 0) {
+            esp_wifi_set_rssi_threshold(ROAMING_RSSI_THRESHOLD);
+        }
 
         // Optimize WiFi performance
         ESP_ERROR_CHECK(esp_wifi_set_bandwidth(WIFI_IF_STA, WIFI_BW_HT20));
@@ -139,6 +155,12 @@ void WiFiManager::startAPMode() {
     wifi_config.ap.authmode = WIFI_AUTH_WPA2_PSK;
     wifi_config.ap.max_connection = 4;
     wifi_config.ap.beacon_interval = 100;
+
+    if (_wifiChannelLock >= 1 && _wifiChannelLock <= 13) {
+        // Channel lock (CE/EMC testing) — in AP mode the ESP32 owns the channel
+        wifi_config.ap.channel = _wifiChannelLock;
+        _logger.info("AP channel locked to " + String(_wifiChannelLock));
+    }
     
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_AP));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &wifi_config));
@@ -285,6 +307,7 @@ void WiFiManager::wifi_event_handler(void* arg, esp_event_base_t event_base, int
             }
             
             case WIFI_EVENT_STA_BSS_RSSI_LOW: {
+                if (inst->_wifiChannelLock != 0) break;  // no roaming while channel is locked
                 unsigned long now = millis();
                 if (now - inst->_lastRoamingAttemptMs > ROAMING_COOLDOWN_MS) {
                     inst->_lastRoamingAttemptMs = now;

@@ -72,6 +72,9 @@ private:
     // WiFi credentials
     char wifi_ssid[33] = "";
     char wifi_password[65] = "";
+
+    // WiFi channel lock for CE/EMC testing (0 = auto, 1-13 = locked)
+    int _wifiChannelLock = 0;
     
     // Roaming configuration
     static constexpr int32_t ROAMING_RSSI_THRESHOLD = -75;       // dBm — trigger roaming scan below this

@@ -374,6 +374,16 @@ void WebServerManager::setupConfigurationRoutes() {
     server->on("/setWiFi", HTTP_POST, [this]() {
         bool hotspotMode = server->hasArg("hotspot");
 
+        // WiFi channel lock for CE testing (0 = auto, 1-13 = locked)
+        bool channelChanged = false;
+        if (server->hasArg("wifi_chan_lock")) {
+            int channel = server->arg("wifi_chan_lock").toInt();
+            if (channel >= 0 && channel <= 13 && channel != preferences.getInt("wifi_chan_lock", 0)) {
+                preferences.putInt("wifi_chan_lock", channel);
+                channelChanged = true;
+            }
+        }
+
         if (hotspotMode) {
             wifi_ssid[0] = '\0';
             wifi_password[0] = '\0';
@@ -386,6 +396,11 @@ void WebServerManager::setupConfigurationRoutes() {
             preferences.putString("wifi_ssid", wifi_ssid);
             preferences.putString("wifi_password", wifi_password);
             String htmlResponse = createRestartResponse("WiFi Credentials Updated!", "WiFi Credentials Updated! Restarting...");
+            server->send(200, "text/html", htmlResponse);
+            delay(1000);
+            ESP.restart();
+        } else if (channelChanged) {
+            String htmlResponse = createRestartResponse("WiFi Channel Updated!", "WiFi Channel Updated! Restarting...");
             server->send(200, "text/html", htmlResponse);
             delay(1000);
             ESP.restart();
@@ -964,6 +979,7 @@ void WebServerManager::setupAPIRoutes() {
         doc["rotctl_port"] = preferences.getInt("rotctl_port", 4533);
         doc["hostname"] = preferences.getString("hostname", "discoverydrive");
         doc["wifissid"] = preferences.getString("wifi_ssid", "discoverydish_HOTSPOT");
+        doc["wifiChanLock"] = preferences.getInt("wifi_chan_lock", 0);
 
         // Authentication (NVS reads)
         doc["loginUser"] = preferences.getString("loginUser", "");
