@@ -26,6 +26,7 @@
 #include "serial_manager.h"
 #include "rotctl_wifi.h"
 #include "logger.h"
+#include "emc_test.h"
 
 #if CONFIG_FREERTOS_UNICORE
 #define ARDUINO_RUNNING_CORE 0
@@ -53,6 +54,7 @@ StellariumPoller stellariumPoller(preferences, motorSensorCtrl, logger);
 WeatherPoller weatherPoller(preferences, logger);
 RotctlWifi rotctlWifi(preferences, motorSensorCtrl, logger);
 WebServerManager webServerManager(preferences, motorSensorCtrl, ina219Manager, stellariumPoller, weatherPoller, serialManager, wifiManager, rotctlWifi, logger);
+EmcTestMode emcTestMode(preferences, wifiManager, logger);
 
 void SafetyMonitor ( void *pvParameters );
 void ReadPowerSensor( void *pvParameters );
@@ -79,6 +81,14 @@ void setup() {
 
   // Initialize serial
   Serial.begin(_SERIAL_BAUD);
+
+  // EMC test mode boot: minimal firmware for RF compliance testing.
+  // Motors stay parked; either serves the EMC test page or transmits a
+  // continuous CW carrier. Never returns.
+  if (emcTestMode.isEnabled()) {
+    logger.begin();
+    emcTestMode.run();
+  }
 
   // Initialize i2c
   Wire.begin(_SDA_PIN, _SCL_PIN); //Start i2C  

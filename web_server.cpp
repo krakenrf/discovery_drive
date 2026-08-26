@@ -142,6 +142,16 @@ void WebServerManager::setupSystemControlRoutes() {
         ESP.restart();
     });
 
+    // Deliberately not exposed in the UI — EMC test labs enter test mode by
+    // visiting this URL directly in a browser (hence HTTP_ANY, not just POST)
+    server->on("/enterEmcMode", HTTP_ANY, [this]() {
+        String htmlResponse = createRestartResponse("EMC Test Mode", "Rebooting into EMC test mode...");
+        server->send(200, "text/html", htmlResponse);
+        preferences.putBool("emc_mode", true);
+        delay(1000);
+        ESP.restart();
+    });
+
     server->on("/resetEEPROM", HTTP_POST, [this]() {
         String htmlResponse = createRestartResponse("Restarting", "Restarting...");
         server->send(200, "text/html", htmlResponse);
